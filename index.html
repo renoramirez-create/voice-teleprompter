@@ -4,7 +4,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#071112" />
-  <title>Voice-Follow Teleprompter v5 Permission Fix</title>
+  <meta name="description" content="A voice-following teleprompter with camera and video recording." />
+  <meta name="application-name" content="VoicePrompt" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="VoicePrompt" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="favicon.ico" sizes="any" />
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
+  <title>VoicePrompt Teleprompter</title>
   <style>
     :root {
       --bg: #05090a;
@@ -222,7 +232,10 @@
       transition: color 90ms linear, background 90ms linear, opacity 90ms linear;
     }
 
-    .word.spoken { color: rgba(245, 247, 247, 0.18); }
+    .word.spoken {
+      color: #33d2c3;
+      opacity: 1;
+    }
 
     .word.current {
       color: #ffffff;
@@ -731,6 +744,11 @@
       let cameraVisible = false;
       let recognitionSessionStarted = false;
       let recognitionManualStop = false;
+      let recognitionStarting = false;
+      let recognitionRestartTimer = null;
+      let recognitionRestartAttempts = 0;
+      let lastRecognitionStartedAt = 0;
+      let lastRecognitionResultAt = 0;
 
       const storageGet = (key) => {
         try { return window.localStorage.getItem(key); }
@@ -908,6 +926,59 @@ Speak naturally. The page will move with you.`;
         els.caption.classList.toggle("unsupported", unsupported);
       };
 
+      const clearRecognitionRestart = () => {
+        if (recognitionRestartTimer) {
+          window.clearTimeout(recognitionRestartTimer);
+          recognitionRestartTimer = null;
+        }
+      };
+
+      const shouldKeepListening = () =>
+        recognitionWanted &&
+        !recognitionManualStop &&
+        els.mode.value === "voice" &&
+        document.visibilityState === "visible";
+
+      const beginRecognition = () => {
+        if (!shouldKeepListening() || recognitionStarting || running) return;
+
+        recognition ||= buildRecognition();
+        if (!recognition) return;
+
+        recognitionStarting = true;
+        try {
+          recognition.start();
+        } catch (error) {
+          recognitionStarting = false;
+
+          // Android Chrome can briefly report that recognition is still stopping.
+          // Retry quietly instead of making the user press the button again.
+          if (shouldKeepListening()) {
+            scheduleRecognitionRestart(350);
+          }
+        }
+      };
+
+      const scheduleRecognitionRestart = (preferredDelay = 320) => {
+        clearRecognitionRestart();
+        if (!shouldKeepListening()) return;
+
+        recognitionRestartAttempts += 1;
+
+        // Reconnect quickly after an ordinary breath, then back off slightly
+        // only if the browser repeatedly refuses to restart.
+        const backoff = Math.min(1800, (recognitionRestartAttempts - 1) * 180);
+        const delay = preferredDelay + backoff;
+
+        setStatus("Listening…", true);
+        showCaption("Brief pause detected. Keeping the microphone listening.");
+
+        recognitionRestartTimer = window.setTimeout(() => {
+          recognitionRestartTimer = null;
+          beginRecognition();
+        }, delay);
+      };
+
       const buildRecognition = () => {
         if (!SpeechRecognition) return null;
 
@@ -918,16 +989,21 @@ Speak naturally. The page will move with you.`;
         instance.maxAlternatives = 1;
 
         instance.onstart = () => {
+          recognitionStarting = false;
           running = true;
           recognitionSessionStarted = true;
           recognitionManualStop = false;
+          lastRecognitionStartedAt = Date.now();
           els.startBtn.disabled = true;
           els.pauseBtn.disabled = false;
+          els.startBtn.textContent = "Listening";
           setStatus("Listening", true);
-          showCaption("Listening… speak naturally. The highlighted word will follow your voice.");
+          showCaption("Listening… pauses and breaths will reconnect automatically.");
         };
 
         instance.onresult = (event) => {
+          lastRecognitionResultAt = Date.now();
+          recognitionRestartAttempts = 0;
           let latest = "";
           for (let i = Math.max(0, event.resultIndex - 2); i < event.results.length; i++) {
             latest += " " + event.results[i][0].transcript;
@@ -951,38 +1027,57 @@ Speak naturally. The page will move with you.`;
         };
 
         instance.onerror = (event) => {
+          recognitionStarting = false;
+
           if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+            clearRecognitionRestart();
             recognitionWanted = false;
+            recognitionManualStop = true;
             running = false;
+            els.startBtn.disabled = false;
+            els.pauseBtn.disabled = true;
+            els.startBtn.textContent = "Start listening";
             setStatus("Mic blocked");
-            showCaption("Microphone access was blocked. Allow microphone access in the browser and try again.", true);
-          } else if (event.error !== "no-speech" && event.error !== "aborted") {
-            setStatus("Recognition issue");
-            showCaption(`Speech recognition issue: <strong>${escapeHtml(event.error)}</strong>. Trying to reconnect.`, true);
+            showCaption("Microphone access was blocked. Allow microphone access for this site and try again.", true);
+            return;
+          }
+
+          if (event.error === "audio-capture") {
+            setStatus("Microphone unavailable");
+            showCaption("The microphone is busy or unavailable. Stop another recording app, then press Start listening.", true);
+            return;
+          }
+
+          if (event.error !== "no-speech" && event.error !== "aborted") {
+            setStatus("Reconnecting…");
+            showCaption(`Voice service paused briefly: <strong>${escapeHtml(event.error)}</strong>. Reconnecting.`);
           }
         };
 
         instance.onend = () => {
+          recognitionStarting = false;
           running = false;
-          recognitionWanted = false;
-          els.startBtn.disabled = false;
-          els.pauseBtn.disabled = true;
 
-          if (recognitionManualStop) {
-            setStatus("Paused");
+          if (!shouldKeepListening()) {
+            clearRecognitionRestart();
+            els.startBtn.disabled = false;
+            els.pauseBtn.disabled = true;
+            els.startBtn.textContent = els.mode.value === "voice" ? "Start listening" : "Start scrolling";
+            setStatus(recognitionManualStop ? "Paused" : "Ready");
             return;
           }
 
-          // Mobile browsers may end a speech-recognition session after silence.
-          // Do not restart automatically, because repeated starts can repeatedly
-          // trigger the browser microphone permission prompt.
-          setStatus("Listening ended");
-          showCaption(
-            recognitionSessionStarted
-              ? 'Voice listening ended. Tap <strong>Resume listening</strong> when you are ready.'
-              : 'Tap <strong>Start listening</strong> to begin.'
-          );
-          els.startBtn.textContent = "Resume listening";
+          // Mobile Chrome frequently closes Web Speech after a short silence even
+          // with continuous=true. Keep the user's listening session active and
+          // quietly start a new recognition segment without changing script position.
+          const sessionLength = Date.now() - lastRecognitionStartedAt;
+          const heardRecently = Date.now() - lastRecognitionResultAt < 5000;
+
+          if (sessionLength > 2500 || heardRecently) {
+            recognitionRestartAttempts = 0;
+          }
+
+          scheduleRecognitionRestart(sessionLength < 900 ? 600 : 260);
         };
 
         return instance;
@@ -1006,25 +1101,31 @@ Speak naturally. The page will move with you.`;
           return;
         }
 
+        clearRecognitionRestart();
         recognitionWanted = true;
         recognitionManualStop = false;
-        recognition ||= buildRecognition();
-        try {
-          recognition.start();
-        } catch (_) {
-          // The recognizer may already be starting.
-        }
+        recognitionRestartAttempts = 0;
+        els.startBtn.disabled = true;
+        els.pauseBtn.disabled = false;
+        els.startBtn.textContent = "Starting…";
+        setStatus("Starting…", true);
+        beginRecognition();
       };
 
       const stopVoice = () => {
+        clearRecognitionRestart();
         recognitionWanted = false;
         recognitionManualStop = true;
+        recognitionStarting = false;
         if (recognition) {
-          try { recognition.stop(); } catch (_) {}
+          try { recognition.abort(); } catch (_) {
+            try { recognition.stop(); } catch (_) {}
+          }
         }
         running = false;
         els.startBtn.disabled = false;
         els.pauseBtn.disabled = true;
+        els.startBtn.textContent = els.mode.value === "voice" ? "Start listening" : "Start scrolling";
         setStatus("Paused");
       };
 
@@ -1543,8 +1644,19 @@ Speak naturally. The page will move with you.`;
       if (!SpeechRecognition) {
         showCaption("Voice recognition is unavailable in this browser. Timed scroll still works; use current Chrome or Edge for voice follow.", true);
       } else {
-        showCaption("Permissions are requested only when you enable the camera or start voice listening. Automatic microphone restarts are disabled.");
+        showCaption("Voice listening reconnects automatically after breaths and short pauses. Press Pause when you want it to stop.");
       }
+
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") {
+          clearRecognitionRestart();
+          return;
+        }
+
+        if (shouldKeepListening() && !running && !recognitionStarting) {
+          scheduleRecognitionRestart(300);
+        }
+      });
 
       window.addEventListener("beforeunload", () => {
         if (mediaRecorder?.state === "recording") mediaRecorder.stop();
@@ -1552,6 +1664,14 @@ Speak naturally. The page will move with you.`;
         if (recordingUrl) URL.revokeObjectURL(recordingUrl);
       });
     })();
+  </script>
+
+  <script>
+    if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+      });
+    }
   </script>
 </body>
 </html>
