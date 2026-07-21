@@ -1,0 +1,1557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#071112" />
+  <title>Voice-Follow Teleprompter v5 Permission Fix</title>
+  <style>
+    :root {
+      --bg: #05090a;
+      --panel: rgba(14, 26, 28, 0.94);
+      --panel-2: #0d1719;
+      --text: #f5f7f7;
+      --muted: #9eabad;
+      --accent: #33d2c3;
+      --accent-soft: rgba(51, 210, 195, 0.16);
+      --danger: #ff7979;
+      --line: rgba(255, 255, 255, 0.11);
+      --font-size: 64px;
+      --reading-width: 1050px;
+      --focus-y: 42%;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 15%, rgba(35, 111, 106, 0.13), transparent 35%),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button, textarea, input, select { font: inherit; }
+
+    button {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #132124;
+      color: var(--text);
+      padding: 10px 14px;
+      cursor: pointer;
+      transition: 160ms ease;
+    }
+
+    button:hover { border-color: rgba(51, 210, 195, 0.65); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #031211;
+      font-weight: 800;
+    }
+
+    .danger {
+      color: #ffdede;
+      border-color: rgba(255, 121, 121, 0.4);
+    }
+
+    .app {
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .toolbar {
+      position: relative;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 12px 16px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(14px);
+    }
+
+    .toolbar-toggle {
+      display: none;
+      margin-left: auto;
+      min-width: 74px;
+      font-weight: 750;
+    }
+
+    .toolbar-extra {
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .editor-message {
+      min-height: 20px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: left;
+    }
+
+    .editor-message.success { color: var(--accent); }
+    .editor-message.error { color: #ffb4b4; }
+
+    .brand {
+      font-weight: 900;
+      letter-spacing: -0.03em;
+      margin-right: 8px;
+      white-space: nowrap;
+    }
+
+    .brand span { color: var(--accent); }
+
+    .control {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    input[type="range"] { accent-color: var(--accent); width: 110px; }
+
+    select {
+      color: var(--text);
+      background: #132124;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 10px;
+    }
+
+    .spacer { flex: 1; }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 120px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #687477;
+      box-shadow: 0 0 0 4px rgba(104, 116, 119, 0.12);
+    }
+
+    .dot.live {
+      background: var(--accent);
+      box-shadow: 0 0 0 5px rgba(51, 210, 195, 0.16), 0 0 20px rgba(51, 210, 195, 0.55);
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      50% { transform: scale(0.8); opacity: 0.7; }
+    }
+
+    .stage {
+      position: relative;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .focus-line {
+      position: absolute;
+      z-index: 5;
+      left: 0;
+      right: 0;
+      top: var(--focus-y);
+      height: 2px;
+      background: linear-gradient(90deg, transparent, rgba(51, 210, 195, 0.55) 20%, rgba(51, 210, 195, 0.55) 80%, transparent);
+      pointer-events: none;
+    }
+
+    .focus-line::before {
+      content: "";
+      position: absolute;
+      left: 20px;
+      top: -7px;
+      width: 0;
+      height: 0;
+      border-top: 8px solid transparent;
+      border-bottom: 8px solid transparent;
+      border-left: 10px solid var(--accent);
+    }
+
+    .reader {
+      position: absolute;
+      inset: 0;
+      overflow-y: auto;
+      scroll-behavior: smooth;
+      scrollbar-width: none;
+      padding: 42vh 7vw 58vh;
+      mask-image: linear-gradient(to bottom, transparent 0%, black 12%, black 82%, transparent 100%);
+    }
+
+    .reader::-webkit-scrollbar { display: none; }
+
+    .script {
+      max-width: var(--reading-width);
+      margin: 0 auto;
+      font-size: var(--font-size);
+      line-height: 1.38;
+      font-weight: 730;
+      letter-spacing: -0.025em;
+      white-space: pre-wrap;
+      text-wrap: pretty;
+      transform-origin: center;
+    }
+
+    .script.mirrored { transform: scaleX(-1); }
+
+    .word {
+      color: rgba(245, 247, 247, 0.36);
+      border-radius: 0.16em;
+      transition: color 90ms linear, background 90ms linear, opacity 90ms linear;
+    }
+
+    .word.spoken { color: rgba(245, 247, 247, 0.18); }
+
+    .word.current {
+      color: #ffffff;
+      background: var(--accent-soft);
+      box-shadow: 0 0 0 0.10em var(--accent-soft);
+    }
+
+    .word.upcoming { color: rgba(245, 247, 247, 0.92); }
+
+    .empty-state {
+      max-width: 760px;
+      margin: 8vh auto 0;
+      color: var(--muted);
+      font-size: 22px;
+      line-height: 1.55;
+      text-align: center;
+    }
+
+    .editor {
+      position: absolute;
+      z-index: 15;
+      inset: 24px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 12px;
+      max-width: 920px;
+      max-height: calc(100% - 48px);
+      margin: auto;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: rgba(10, 18, 20, 0.97);
+      box-shadow: 0 28px 80px rgba(0, 0, 0, 0.52);
+      backdrop-filter: blur(18px);
+    }
+
+    .editor.hidden { display: none; }
+
+    .editor h1 {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: -0.03em;
+    }
+
+    .editor p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 240px;
+      resize: none;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      outline: none;
+      background: #081012;
+      color: var(--text);
+      padding: 16px;
+      line-height: 1.55;
+    }
+
+    textarea:focus { border-color: rgba(51, 210, 195, 0.65); }
+
+    .editor-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+
+    .caption {
+      position: absolute;
+      z-index: 8;
+      left: 50%;
+      bottom: 18px;
+      transform: translateX(-50%);
+      width: min(900px, calc(100% - 32px));
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(8, 16, 18, 0.84);
+      color: var(--muted);
+      text-align: center;
+      font-size: 14px;
+      backdrop-filter: blur(12px);
+      pointer-events: none;
+    }
+
+    .caption strong { color: var(--text); }
+
+    .unsupported {
+      color: #ffd2d2;
+      background: rgba(255, 121, 121, 0.08);
+      border-color: rgba(255, 121, 121, 0.35);
+    }
+
+
+    .camera-layer {
+      position: absolute;
+      z-index: 0;
+      inset: 0;
+      overflow: hidden;
+      background: #020404;
+    }
+
+    .camera-layer.hidden { display: none; }
+
+    .camera-preview {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+      background: #020404;
+    }
+
+    .camera-preview.front-camera {
+      transform: scaleX(-1);
+    }
+
+    .camera-shade {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.46);
+      pointer-events: none;
+    }
+
+    .reader { z-index: 3; }
+
+    .record-button {
+      position: relative;
+      border-color: rgba(255, 104, 104, 0.5);
+    }
+
+    .record-button.recording {
+      color: #fff;
+      background: #b91f2d;
+      border-color: #ff7884;
+      animation: recordPulse 1.3s infinite;
+    }
+
+    @keyframes recordPulse {
+      50% { box-shadow: 0 0 0 5px rgba(255, 80, 94, 0.16); }
+    }
+
+    .recording-time {
+      display: inline-block;
+      min-width: 42px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .record-review {
+      position: absolute;
+      z-index: 30;
+      inset: 10px;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      gap: 12px;
+      max-width: 980px;
+      max-height: calc(100% - 20px);
+      margin: auto;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: rgba(7, 13, 15, 0.98);
+      box-shadow: 0 28px 90px rgba(0, 0, 0, 0.72);
+      backdrop-filter: blur(18px);
+    }
+
+    .record-review.hidden { display: none; }
+
+    .review-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .review-head h2 {
+      margin: 0;
+      font-size: 20px;
+    }
+
+    .review-video {
+      width: 100%;
+      height: 100%;
+      min-height: 220px;
+      border-radius: 14px;
+      background: #000;
+      object-fit: contain;
+    }
+
+    .review-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    @media (max-width: 760px) {
+      :root { --font-size: 42px; }
+
+      .toolbar {
+        min-height: 52px;
+        padding: 8px;
+        gap: 6px;
+      }
+
+      .toolbar button,
+      .toolbar select {
+        min-height: 38px;
+        padding: 8px 10px;
+        font-size: 13px;
+      }
+
+      .brand {
+        width: auto;
+        flex: 1 1 auto;
+        min-width: 94px;
+        margin-right: 0;
+        font-size: 16px;
+      }
+
+      .toolbar-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        order: 4;
+      }
+
+      #editBtn { order: 1; }
+      #startBtn { order: 2; }
+      #pauseBtn { order: 3; }
+      .brand { order: 0; }
+
+      .toolbar-extra {
+        order: 5;
+      }
+
+      .toolbar:not(.compact) .toolbar-extra {
+        display: inline-flex;
+      }
+
+      .toolbar.compact {
+        flex-wrap: nowrap;
+      }
+
+      .toolbar.compact .brand {
+        flex: 0 0 30px;
+        min-width: 30px;
+        width: 30px;
+        overflow: hidden;
+        font-size: 0;
+      }
+
+      .toolbar.compact .brand::before {
+        content: "VP";
+        color: var(--accent);
+        font-size: 15px;
+        font-weight: 900;
+      }
+
+      .toolbar.compact #pauseBtn:disabled {
+        display: none;
+      }
+
+      .toolbar.compact .toolbar-extra {
+        display: none !important;
+      }
+
+      .toolbar.compact #startBtn {
+        white-space: nowrap;
+      }
+
+      .control label { display: none; }
+      .control input[type="range"] { width: 92px; }
+      .spacer { display: none; }
+
+      .status {
+        min-width: auto;
+        padding: 0 6px;
+      }
+
+      .reader {
+        padding-left: 5vw;
+        padding-right: 5vw;
+      }
+
+      .editor {
+        inset: 6px;
+        max-height: calc(100dvh - 12px);
+        padding: 14px;
+        border-radius: 16px;
+      }
+
+      .editor textarea {
+        min-height: 42dvh;
+        font-size: 16px;
+      }
+
+      .editor-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .editor-actions .primary {
+        grid-column: 1 / -1;
+      }
+
+      .caption { bottom: 8px; }
+
+      #cameraBtn,
+      #recordBtn {
+        order: 4;
+        min-width: 48px;
+      }
+
+      #toolbarToggle { order: 5; }
+
+      .toolbar-extra { order: 6; }
+
+      .toolbar.compact #cameraBtn,
+      .toolbar.compact #recordBtn {
+        padding-inline: 9px;
+      }
+
+      .toolbar.compact #recordBtn .recording-time {
+        display: none;
+      }
+
+      .record-review {
+        inset: 4px;
+        max-height: calc(100dvh - 8px);
+        border-radius: 15px;
+      }
+
+      .review-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .review-actions .primary {
+        grid-column: 1 / -1;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header id="toolbar" class="toolbar">
+      <div class="brand">Voice<span>Prompt</span></div>
+
+      <button id="editBtn">Edit</button>
+      <button id="startBtn" class="primary">Start listening</button>
+      <button id="pauseBtn" disabled>Pause</button>
+      <button id="cameraBtn" type="button">Enable camera</button>
+      <button id="recordBtn" class="record-button" type="button" disabled>● Rec <span id="recordingTime" class="recording-time">00:00</span></button>
+      <button id="toolbarToggle" class="toolbar-toggle" type="button" aria-controls="toolbar" aria-expanded="true">Less ↑</button>
+
+      <button id="resetBtn" class="toolbar-extra">Reset</button>
+
+      <div class="control toolbar-extra">
+        <label for="fontSize">Text</label>
+        <input id="fontSize" type="range" min="30" max="100" value="64" />
+      </div>
+
+      <div class="control toolbar-extra">
+        <label for="lookAhead">Highlight</label>
+        <input id="lookAhead" type="range" min="4" max="28" value="14" />
+      </div>
+
+      <select id="mode" class="toolbar-extra" aria-label="Scrolling mode">
+        <option value="voice">Voice follow</option>
+        <option value="auto">Timed scroll</option>
+      </select>
+
+      <select id="tracking" class="toolbar-extra" aria-label="Voice tracking sensitivity">
+        <option value="steady" selected>Steady tracking</option>
+        <option value="responsive">Responsive tracking</option>
+      </select>
+
+      <div class="control toolbar-extra" id="speedControl" hidden>
+        <label for="speed">WPM</label>
+        <input id="speed" type="range" min="70" max="240" value="135" />
+        <span id="speedValue">135</span>
+      </div>
+
+      <button id="flipCameraBtn" class="toolbar-extra" type="button" disabled>Flip camera</button>
+      <button id="stopCameraBtn" class="toolbar-extra" type="button" disabled>Hide camera</button>
+      <button id="mirrorBtn" class="toolbar-extra">Mirror</button>
+      <button id="fullscreenBtn" class="toolbar-extra">Full screen</button>
+
+      <div class="spacer toolbar-extra"></div>
+      <div class="status toolbar-extra">
+        <span id="statusDot" class="dot"></span>
+        <span id="statusText">Ready</span>
+      </div>
+    </header>
+
+    <section class="stage">
+      <div id="cameraLayer" class="camera-layer hidden">
+        <video id="cameraPreview" class="camera-preview front-camera" autoplay muted playsinline></video>
+        <div class="camera-shade"></div>
+      </div>
+      <div class="focus-line" aria-hidden="true"></div>
+      <div id="reader" class="reader">
+        <div id="script" class="script"></div>
+      </div>
+      <div id="caption" class="caption">Paste your script, then choose <strong>Start listening</strong>.</div>
+
+      <section id="editor" class="editor">
+        <div>
+          <h1>Your teleprompter script</h1>
+          <p>The app follows short phrases near your current position and blocks accidental sentence jumps.</p>
+        </div>
+        <textarea id="scriptInput" spellcheck="true" autocapitalize="sentences" autocomplete="off" inputmode="text" placeholder="Paste or write your script here..."></textarea>
+        <p id="editorMessage" class="editor-message" aria-live="polite">On mobile, use Paste or press and hold inside the text box.</p>
+        <div class="editor-actions">
+          <button id="pasteBtn" type="button">Paste</button>
+          <button id="sampleBtn" type="button">Load sample</button>
+          <button id="saveBtn" class="primary" type="button">Use this script</button>
+        </div>
+      </section>
+
+      <section id="recordReview" class="record-review hidden" aria-modal="true" role="dialog">
+        <div class="review-head">
+          <h2>Review your recording</h2>
+          <button id="closeReviewBtn" type="button">Close</button>
+        </div>
+        <video id="reviewVideo" class="review-video" controls playsinline></video>
+        <div class="review-actions">
+          <button id="deleteRecordingBtn" class="danger" type="button">Delete</button>
+          <button id="shareRecordingBtn" type="button">Share</button>
+          <button id="saveRecordingBtn" class="primary" type="button">Save video</button>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+      const els = {
+        reader: document.getElementById("reader"),
+        script: document.getElementById("script"),
+        editor: document.getElementById("editor"),
+        scriptInput: document.getElementById("scriptInput"),
+        editorMessage: document.getElementById("editorMessage"),
+        pasteBtn: document.getElementById("pasteBtn"),
+        toolbar: document.getElementById("toolbar"),
+        toolbarToggle: document.getElementById("toolbarToggle"),
+        editBtn: document.getElementById("editBtn"),
+        saveBtn: document.getElementById("saveBtn"),
+        sampleBtn: document.getElementById("sampleBtn"),
+        startBtn: document.getElementById("startBtn"),
+        pauseBtn: document.getElementById("pauseBtn"),
+        cameraBtn: document.getElementById("cameraBtn"),
+        recordBtn: document.getElementById("recordBtn"),
+        recordingTime: document.getElementById("recordingTime"),
+        flipCameraBtn: document.getElementById("flipCameraBtn"),
+        stopCameraBtn: document.getElementById("stopCameraBtn"),
+        cameraLayer: document.getElementById("cameraLayer"),
+        cameraPreview: document.getElementById("cameraPreview"),
+        recordReview: document.getElementById("recordReview"),
+        reviewVideo: document.getElementById("reviewVideo"),
+        closeReviewBtn: document.getElementById("closeReviewBtn"),
+        deleteRecordingBtn: document.getElementById("deleteRecordingBtn"),
+        shareRecordingBtn: document.getElementById("shareRecordingBtn"),
+        saveRecordingBtn: document.getElementById("saveRecordingBtn"),
+        resetBtn: document.getElementById("resetBtn"),
+        mirrorBtn: document.getElementById("mirrorBtn"),
+        fullscreenBtn: document.getElementById("fullscreenBtn"),
+        fontSize: document.getElementById("fontSize"),
+        lookAhead: document.getElementById("lookAhead"),
+        mode: document.getElementById("mode"),
+        tracking: document.getElementById("tracking"),
+        speedControl: document.getElementById("speedControl"),
+        speed: document.getElementById("speed"),
+        speedValue: document.getElementById("speedValue"),
+        statusDot: document.getElementById("statusDot"),
+        statusText: document.getElementById("statusText"),
+        caption: document.getElementById("caption")
+      };
+
+      let recognition = null;
+      let recognitionWanted = false;
+      let running = false;
+      let currentIndex = 0;
+      let wordData = [];
+      let spans = [];
+      let autoFrame = null;
+      let lastFrameTime = 0;
+      let autoWordProgress = 0;
+      let cameraStream = null;
+      let mediaRecorder = null;
+      let recordedChunks = [];
+      let recordedBlob = null;
+      let recordingUrl = null;
+      let recordingFileName = "";
+      let recordingStartedAt = 0;
+      let recordingTimer = null;
+      let currentFacingMode = "user";
+      let cameraVisible = false;
+      let recognitionSessionStarted = false;
+      let recognitionManualStop = false;
+
+      const storageGet = (key) => {
+        try { return window.localStorage.getItem(key); }
+        catch (_) { return null; }
+      };
+
+      const storageSet = (key, value) => {
+        try { window.localStorage.setItem(key, value); }
+        catch (_) { /* Storage may be blocked for local files or private browsing. */ }
+      };
+
+      const sample = `There are moments when the words matter too much to rush.
+
+Take a breath. Look into the camera. Let the thought land before you continue.
+
+This teleprompter listens as you speak. It follows your place, even when you pause, repeat a word, or move ahead in the script.
+
+Speak naturally. The page will move with you.`;
+
+      const normalize = (value) =>
+        value
+          .toLowerCase()
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .replace(/[^a-z0-9']/g, "");
+
+      const similarity = (a, b) => {
+        if (!a || !b) return 0;
+        if (a === b) return 1;
+        if (a.length >= 4 && b.length >= 4 && (a.startsWith(b) || b.startsWith(a))) return 0.84;
+
+        // One-edit tolerance for recognition mistakes.
+        if (Math.abs(a.length - b.length) > 1) return 0;
+        let i = 0, j = 0, edits = 0;
+        while (i < a.length && j < b.length) {
+          if (a[i] === b[j]) {
+            i++; j++;
+          } else {
+            edits++;
+            if (edits > 1) return 0;
+            if (a.length > b.length) i++;
+            else if (b.length > a.length) j++;
+            else { i++; j++; }
+          }
+        }
+        edits += (a.length - i) + (b.length - j);
+        return edits <= 1 && Math.max(a.length, b.length) >= 5 ? 0.72 : 0;
+      };
+
+      const parseScript = (text) => {
+        wordData = [];
+        els.script.innerHTML = "";
+
+        const tokens = text.match(/\S+|\s+/g) || [];
+        tokens.forEach((token) => {
+          if (/^\s+$/.test(token)) {
+            els.script.appendChild(document.createTextNode(token));
+            return;
+          }
+
+          const span = document.createElement("span");
+          span.className = "word";
+          span.textContent = token;
+          span.dataset.index = String(wordData.length);
+
+          const normalized = normalize(token);
+          wordData.push({ original: token, normalized, span });
+          els.script.appendChild(span);
+        });
+
+        spans = wordData.map((item) => item.span);
+        currentIndex = 0;
+        autoWordProgress = 0;
+        updateHighlight(true);
+      };
+
+      const updateHighlight = (forceScroll = false) => {
+        const ahead = Number(els.lookAhead.value);
+
+        spans.forEach((span, index) => {
+          span.classList.toggle("spoken", index < currentIndex);
+          span.classList.toggle("current", index === currentIndex);
+          span.classList.toggle("upcoming", index > currentIndex && index <= currentIndex + ahead);
+        });
+
+        if (spans[currentIndex] && (forceScroll || currentIndex % 2 === 0)) {
+          const target = spans[currentIndex];
+          const desiredY = els.reader.clientHeight * 0.42;
+          const targetY = target.offsetTop - desiredY + target.offsetHeight / 2;
+          els.reader.scrollTo({ top: Math.max(0, targetY), behavior: forceScroll ? "auto" : "smooth" });
+        }
+      };
+
+      const findBestPosition = (heardWords) => {
+        if (!heardWords.length || !wordData.length) return null;
+
+        const heard = heardWords.map(normalize).filter(Boolean).slice(-12);
+        if (heard.length < 2) return null;
+
+        const steady = els.tracking.value === "steady";
+        const searchBehind = steady ? 4 : 6;
+        const searchAhead = steady ? 38 : 65;
+        const searchStart = Math.max(0, currentIndex - searchBehind);
+        const searchEnd = Math.min(wordData.length - 1, currentIndex + searchAhead);
+        let best = { score: 0, nextIndex: currentIndex, start: currentIndex, length: 0 };
+
+        // A single word is never enough to move the prompt. We compare the latest
+        // two-to-ten spoken words only within a small area around the current line.
+        const maxLength = Math.min(heard.length, 10);
+        for (let length = 2; length <= maxLength; length++) {
+          const heardSlice = heard.slice(-length);
+
+          for (let start = searchStart; start + length - 1 <= searchEnd; start++) {
+            const distance = start - currentIndex;
+
+            // Moving farther ahead requires a longer phrase confirmation.
+            if (distance > 8 && length < 4) continue;
+            if (distance > 18 && length < 6) continue;
+            if (steady && distance > 28 && length < 8) continue;
+
+            let score = 0;
+            let matched = 0;
+            let misses = 0;
+
+            for (let offset = 0; offset < length; offset++) {
+              const scriptWord = wordData[start + offset]?.normalized;
+              const wordScore = similarity(heardSlice[offset], scriptWord);
+
+              if (wordScore === 0) {
+                misses++;
+                // Allow one recognition mistake in longer phrases.
+                if (length < 5 || misses > 1) {
+                  score = 0;
+                  break;
+                }
+                continue;
+              }
+
+              matched++;
+              score += wordScore;
+            }
+
+            if (!score || matched < Math.max(2, length - 1)) continue;
+
+            const average = score / length;
+            const phraseBonus = Math.min(0.12, length * 0.014);
+            const distancePenalty = distance > 0
+              ? distance * (steady ? 0.012 : 0.008)
+              : Math.abs(distance) * 0.018;
+            const continuityBonus = Math.abs(distance) <= 4 ? 0.10 : 0;
+            const total = average + phraseBonus + continuityBonus - distancePenalty;
+
+            if (total > best.score) {
+              best = {
+                score: total,
+                start,
+                nextIndex: Math.min(wordData.length - 1, start + length),
+                length
+              };
+            }
+          }
+        }
+
+        const threshold = steady ? 0.82 : 0.76;
+        return best.score >= threshold ? best : null;
+      };
+
+      const setStatus = (text, live = false) => {
+        els.statusText.textContent = text;
+        els.statusDot.classList.toggle("live", live);
+      };
+
+      const showCaption = (text, unsupported = false) => {
+        els.caption.innerHTML = text;
+        els.caption.classList.toggle("unsupported", unsupported);
+      };
+
+      const buildRecognition = () => {
+        if (!SpeechRecognition) return null;
+
+        const instance = new SpeechRecognition();
+        instance.continuous = true;
+        instance.interimResults = true;
+        instance.lang = "en-US";
+        instance.maxAlternatives = 1;
+
+        instance.onstart = () => {
+          running = true;
+          recognitionSessionStarted = true;
+          recognitionManualStop = false;
+          els.startBtn.disabled = true;
+          els.pauseBtn.disabled = false;
+          setStatus("Listening", true);
+          showCaption("Listening… speak naturally. The highlighted word will follow your voice.");
+        };
+
+        instance.onresult = (event) => {
+          let latest = "";
+          for (let i = Math.max(0, event.resultIndex - 2); i < event.results.length; i++) {
+            latest += " " + event.results[i][0].transcript;
+          }
+
+          const heardWords = latest.trim().split(/\s+/).filter(Boolean);
+          const match = findBestPosition(heardWords);
+
+          if (match && match.nextIndex >= currentIndex - 2) {
+            const steady = els.tracking.value === "steady";
+            const maxAdvance = steady ? 5 : 9;
+            const proposedIndex = Math.max(currentIndex, match.nextIndex);
+
+            // Even a strong match cannot skip an entire sentence in one update.
+            currentIndex = Math.min(proposedIndex, currentIndex + maxAdvance);
+            updateHighlight();
+          }
+
+          const preview = heardWords.slice(-10).join(" ");
+          if (preview) showCaption(`Heard: <strong>${escapeHtml(preview)}</strong>`);
+        };
+
+        instance.onerror = (event) => {
+          if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+            recognitionWanted = false;
+            running = false;
+            setStatus("Mic blocked");
+            showCaption("Microphone access was blocked. Allow microphone access in the browser and try again.", true);
+          } else if (event.error !== "no-speech" && event.error !== "aborted") {
+            setStatus("Recognition issue");
+            showCaption(`Speech recognition issue: <strong>${escapeHtml(event.error)}</strong>. Trying to reconnect.`, true);
+          }
+        };
+
+        instance.onend = () => {
+          running = false;
+          recognitionWanted = false;
+          els.startBtn.disabled = false;
+          els.pauseBtn.disabled = true;
+
+          if (recognitionManualStop) {
+            setStatus("Paused");
+            return;
+          }
+
+          // Mobile browsers may end a speech-recognition session after silence.
+          // Do not restart automatically, because repeated starts can repeatedly
+          // trigger the browser microphone permission prompt.
+          setStatus("Listening ended");
+          showCaption(
+            recognitionSessionStarted
+              ? 'Voice listening ended. Tap <strong>Resume listening</strong> when you are ready.'
+              : 'Tap <strong>Start listening</strong> to begin.'
+          );
+          els.startBtn.textContent = "Resume listening";
+        };
+
+        return instance;
+      };
+
+      const escapeHtml = (value) => {
+        const div = document.createElement("div");
+        div.textContent = value;
+        return div.innerHTML;
+      };
+
+      const startVoice = () => {
+        if (!SpeechRecognition) {
+          showCaption("This browser does not provide speech recognition. Try the latest Chrome or Edge, or use Timed scroll mode.", true);
+          setStatus("Unsupported");
+          return;
+        }
+
+        if (!wordData.length) {
+          els.editor.classList.remove("hidden");
+          return;
+        }
+
+        recognitionWanted = true;
+        recognitionManualStop = false;
+        recognition ||= buildRecognition();
+        try {
+          recognition.start();
+        } catch (_) {
+          // The recognizer may already be starting.
+        }
+      };
+
+      const stopVoice = () => {
+        recognitionWanted = false;
+        recognitionManualStop = true;
+        if (recognition) {
+          try { recognition.stop(); } catch (_) {}
+        }
+        running = false;
+        els.startBtn.disabled = false;
+        els.pauseBtn.disabled = true;
+        setStatus("Paused");
+      };
+
+      const startAuto = () => {
+        if (!wordData.length) return;
+        running = true;
+        els.startBtn.disabled = true;
+        els.pauseBtn.disabled = false;
+        setStatus("Auto scrolling", true);
+        lastFrameTime = performance.now();
+        autoFrame = requestAnimationFrame(autoTick);
+      };
+
+      const autoTick = (now) => {
+        if (!running || els.mode.value !== "auto") return;
+
+        const elapsedMinutes = (now - lastFrameTime) / 60000;
+        lastFrameTime = now;
+        autoWordProgress += elapsedMinutes * Number(els.speed.value);
+
+        const nextIndex = Math.min(wordData.length - 1, Math.floor(autoWordProgress));
+        if (nextIndex !== currentIndex) {
+          currentIndex = nextIndex;
+          updateHighlight();
+        }
+
+        if (currentIndex >= wordData.length - 1) {
+          pauseAll();
+          setStatus("Finished");
+          return;
+        }
+
+        autoFrame = requestAnimationFrame(autoTick);
+      };
+
+      const pauseAll = () => {
+        stopVoice();
+        running = false;
+        if (autoFrame) cancelAnimationFrame(autoFrame);
+        autoFrame = null;
+        els.startBtn.disabled = false;
+        els.pauseBtn.disabled = true;
+        setStatus("Paused");
+      };
+
+      const reset = () => {
+        pauseAll();
+        currentIndex = 0;
+        autoWordProgress = 0;
+        els.reader.scrollTop = 0;
+        updateHighlight(true);
+        showCaption("Reset to the beginning.");
+        setStatus("Ready");
+        els.startBtn.textContent = els.mode.value === "voice" ? "Start listening" : "Start scrolling";
+        recognitionSessionStarted = false;
+      };
+
+
+      const formatDuration = (milliseconds) => {
+        const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+        const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+        const seconds = String(totalSeconds % 60).padStart(2, "0");
+        return `${minutes}:${seconds}`;
+      };
+
+      const hasLiveTrack = (kind) =>
+        Boolean(cameraStream?.getTracks().some(
+          (track) => track.kind === kind && track.readyState === "live"
+        ));
+
+      const updateCameraUi = () => {
+        const cameraReady = hasLiveTrack("video");
+        els.cameraLayer.classList.toggle("hidden", !cameraReady || !cameraVisible);
+        els.cameraBtn.textContent = !cameraReady
+          ? "Enable camera"
+          : cameraVisible
+            ? "Hide cam"
+            : "Show cam";
+        els.recordBtn.disabled = !cameraReady;
+        els.flipCameraBtn.disabled = !cameraReady;
+        els.stopCameraBtn.disabled = !cameraReady;
+        els.stopCameraBtn.textContent = cameraVisible ? "Hide camera" : "Show camera";
+      };
+
+      const releaseCameraTracks = () => {
+        if (cameraStream) {
+          cameraStream.getTracks().forEach((track) => track.stop());
+        }
+        cameraStream = null;
+        cameraVisible = false;
+        els.cameraPreview.srcObject = null;
+        updateCameraUi();
+      };
+
+      const attachCameraStream = async (stream) => {
+        cameraStream = stream;
+        els.cameraPreview.srcObject = cameraStream;
+        els.cameraPreview.classList.toggle("front-camera", currentFacingMode === "user");
+        cameraVisible = true;
+        await els.cameraPreview.play();
+        updateCameraUi();
+      };
+
+      const startCamera = async () => {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          showCaption("Camera access is unavailable here. Open the app from an HTTPS website or localhost.", true);
+          return false;
+        }
+
+        // Reuse the already-authorized stream rather than asking for permission again.
+        if (hasLiveTrack("video") && hasLiveTrack("audio")) {
+          cameraVisible = true;
+          updateCameraUi();
+          showCaption("Camera ready. The existing camera and microphone session is being reused.");
+          return true;
+        }
+
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: currentFacingMode },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+              frameRate: { ideal: 30, max: 30 }
+            },
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          });
+
+          await attachCameraStream(stream);
+          showCaption("Camera and microphone enabled for this session. Tap <strong>● Rec</strong> to record.");
+          return true;
+        } catch (error) {
+          releaseCameraTracks();
+          const message = error?.name === "NotAllowedError"
+            ? "Camera or microphone permission was denied. Allow both permissions and try again."
+            : `Unable to start camera: ${escapeHtml(error?.message || "unknown error")}`;
+          showCaption(message, true);
+          return false;
+        }
+      };
+
+      const chooseRecordingMimeType = () => {
+        if (!window.MediaRecorder) return "";
+
+        const candidates = [
+          'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+          "video/mp4",
+          "video/webm;codecs=vp9,opus",
+          "video/webm;codecs=vp8,opus",
+          "video/webm"
+        ];
+
+        return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+      };
+
+      const updateRecordingTimer = () => {
+        els.recordingTime.textContent = formatDuration(Date.now() - recordingStartedAt);
+      };
+
+      const clearRecordingPreview = () => {
+        if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+        recordingUrl = null;
+        recordedBlob = null;
+        recordingFileName = "";
+        els.reviewVideo.removeAttribute("src");
+        els.reviewVideo.load();
+        els.recordReview.classList.add("hidden");
+      };
+
+      const showRecordingPreview = () => {
+        if (!recordedBlob) return;
+        if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+        recordingUrl = URL.createObjectURL(recordedBlob);
+        els.reviewVideo.src = recordingUrl;
+        els.recordReview.classList.remove("hidden");
+      };
+
+      const finishRecording = () => {
+        window.clearInterval(recordingTimer);
+        recordingTimer = null;
+        els.recordBtn.classList.remove("recording");
+        els.recordBtn.innerHTML = '● Rec <span id="recordingTime" class="recording-time">00:00</span>';
+        els.recordingTime = document.getElementById("recordingTime");
+        els.flipCameraBtn.disabled = !cameraStream;
+
+        if (!recordedChunks.length) {
+          showCaption("The browser did not return recording data.", true);
+          return;
+        }
+
+        const type = mediaRecorder?.mimeType || recordedChunks[0]?.type || "video/webm";
+        recordedBlob = new Blob(recordedChunks, { type });
+        const extension = type.includes("mp4") ? "mp4" : "webm";
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+        recordingFileName = `teleprompter-recording-${stamp}.${extension}`;
+        showCaption("Recording complete. Review, save, or share your video.");
+        showRecordingPreview();
+      };
+
+      const startRecording = async () => {
+        if (!window.MediaRecorder) {
+          showCaption("Video recording is not supported by this browser.", true);
+          return;
+        }
+
+        if (!hasLiveTrack("video") || !hasLiveTrack("audio")) {
+          const cameraStarted = await startCamera();
+          if (!cameraStarted) return;
+        }
+
+        cameraVisible = true;
+        updateCameraUi();
+
+        try {
+          recordedChunks = [];
+          const mimeType = chooseRecordingMimeType();
+          const options = {
+            videoBitsPerSecond: 5_000_000,
+            audioBitsPerSecond: 128_000
+          };
+          if (mimeType) options.mimeType = mimeType;
+
+          mediaRecorder = new MediaRecorder(cameraStream, options);
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data && event.data.size > 0) recordedChunks.push(event.data);
+          };
+          mediaRecorder.onerror = (event) => {
+            showCaption(`Recording error: ${escapeHtml(event.error?.message || "unknown error")}`, true);
+          };
+          mediaRecorder.onstop = finishRecording;
+
+          recordingStartedAt = Date.now();
+          els.recordBtn.classList.add("recording");
+          els.recordBtn.innerHTML = '■ Stop <span id="recordingTime" class="recording-time">00:00</span>';
+          els.recordingTime = document.getElementById("recordingTime");
+          els.flipCameraBtn.disabled = true;
+          updateRecordingTimer();
+          recordingTimer = window.setInterval(updateRecordingTimer, 500);
+          mediaRecorder.start(1000);
+          showCaption("Recording video and microphone audio.");
+        } catch (error) {
+          showCaption(`Unable to record: ${escapeHtml(error?.message || "unknown error")}`, true);
+        }
+      };
+
+      const stopRecording = () => {
+        if (mediaRecorder?.state === "recording" || mediaRecorder?.state === "paused") {
+          mediaRecorder.stop();
+        }
+      };
+
+      const toggleRecording = () => {
+        if (mediaRecorder?.state === "recording" || mediaRecorder?.state === "paused") {
+          stopRecording();
+        } else {
+          startRecording();
+        }
+      };
+
+      const toggleCamera = async () => {
+        if (!hasLiveTrack("video")) {
+          await startCamera();
+          return;
+        }
+
+        if (mediaRecorder?.state === "recording") {
+          showCaption("Stop the recording before hiding the camera preview.", true);
+          return;
+        }
+
+        // Only hide the preview. Keep the authorized stream alive so the
+        // browser does not ask for camera/microphone permission again.
+        cameraVisible = !cameraVisible;
+        updateCameraUi();
+        showCaption(
+          cameraVisible
+            ? "Camera preview shown. The existing permission session is still active."
+            : "Camera preview hidden. Permission remains active for this page session."
+        );
+      };
+
+      const flipCamera = async () => {
+        if (mediaRecorder?.state === "recording") {
+          showCaption("Stop the recording before switching cameras.", true);
+          return;
+        }
+
+        if (!navigator.mediaDevices?.getUserMedia) return;
+
+        const nextFacingMode = currentFacingMode === "user" ? "environment" : "user";
+        const existingAudioTracks = cameraStream?.getAudioTracks().filter(
+          (track) => track.readyState === "live"
+        ) || [];
+
+        try {
+          // Request video only. The already-authorized microphone track is reused,
+          // preventing another microphone permission request during camera flips.
+          const videoOnlyStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: nextFacingMode },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+              frameRate: { ideal: 30, max: 30 }
+            },
+            audio: false
+          });
+
+          cameraStream?.getVideoTracks().forEach((track) => track.stop());
+          const combinedStream = new MediaStream([
+            ...videoOnlyStream.getVideoTracks(),
+            ...existingAudioTracks
+          ]);
+
+          currentFacingMode = nextFacingMode;
+          await attachCameraStream(combinedStream);
+          showCaption("Camera switched. The existing microphone track was reused.");
+        } catch (error) {
+          showCaption(`Unable to switch cameras: ${escapeHtml(error?.message || "unknown error")}`, true);
+        }
+      };
+
+      const saveRecording = () => {
+        if (!recordedBlob || !recordingUrl) return;
+        const link = document.createElement("a");
+        link.href = recordingUrl;
+        link.download = recordingFileName;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      };
+
+      const shareRecording = async () => {
+        if (!recordedBlob) return;
+
+        try {
+          const file = new File([recordedBlob], recordingFileName, { type: recordedBlob.type });
+          if (navigator.share && navigator.canShare?.({ files: [file] })) {
+            await navigator.share({
+              files: [file],
+              title: "Teleprompter recording"
+            });
+          } else {
+            saveRecording();
+            showCaption("Direct sharing is unavailable, so the video was saved instead.");
+          }
+        } catch (error) {
+          if (error?.name !== "AbortError") {
+            saveRecording();
+            showCaption("Sharing was unavailable, so the video was saved instead.");
+          }
+        }
+      };
+
+      const setEditorMessage = (message, type = "") => {
+        els.editorMessage.textContent = message;
+        els.editorMessage.className = `editor-message${type ? ` ${type}` : ""}`;
+      };
+
+      const insertIntoScript = (value) => {
+        const start = els.scriptInput.selectionStart ?? els.scriptInput.value.length;
+        const end = els.scriptInput.selectionEnd ?? start;
+        const before = els.scriptInput.value.slice(0, start);
+        const after = els.scriptInput.value.slice(end);
+        els.scriptInput.value = `${before}${value}${after}`;
+        const cursor = start + value.length;
+        els.scriptInput.focus();
+        els.scriptInput.setSelectionRange(cursor, cursor);
+      };
+
+      const pasteFromClipboard = async () => {
+        try {
+          if (!navigator.clipboard?.readText) throw new Error("clipboard-unavailable");
+          const clipboardText = await navigator.clipboard.readText();
+          if (!clipboardText) {
+            setEditorMessage("Your clipboard is empty.", "error");
+            return;
+          }
+          insertIntoScript(clipboardText);
+          setEditorMessage("Clipboard text pasted successfully.", "success");
+        } catch (_) {
+          els.scriptInput.focus();
+          setEditorMessage("Tap and hold inside the text box, then choose Paste. Browser clipboard access may require HTTPS.", "error");
+        }
+      };
+
+      const setToolbarCompact = (compact, remember = true) => {
+        els.toolbar.classList.toggle("compact", compact);
+        els.toolbarToggle.textContent = compact ? "More ↓" : "Less ↑";
+        els.toolbarToggle.setAttribute("aria-expanded", String(!compact));
+        if (remember) storageSet("voicePromptToolbarCompact", compact ? "1" : "0");
+      };
+
+      els.cameraBtn.addEventListener("click", toggleCamera);
+      els.recordBtn.addEventListener("click", toggleRecording);
+      els.flipCameraBtn.addEventListener("click", flipCamera);
+      els.stopCameraBtn.addEventListener("click", toggleCamera);
+      els.closeReviewBtn.addEventListener("click", () => els.recordReview.classList.add("hidden"));
+      els.deleteRecordingBtn.addEventListener("click", clearRecordingPreview);
+      els.saveRecordingBtn.addEventListener("click", saveRecording);
+      els.shareRecordingBtn.addEventListener("click", shareRecording);
+
+      els.pasteBtn.addEventListener("click", pasteFromClipboard);
+
+      els.toolbarToggle.addEventListener("click", () => {
+        setToolbarCompact(!els.toolbar.classList.contains("compact"));
+      });
+
+      els.saveBtn.addEventListener("click", () => {
+        const text = els.scriptInput.value.trim();
+        if (!text) return;
+        storageSet("voicePromptScript", text);
+        parseScript(text);
+        els.editor.classList.add("hidden");
+        if (window.matchMedia("(max-width: 760px)").matches) setToolbarCompact(true);
+        showCaption("Script loaded. Choose <strong>Start listening</strong>.");
+      });
+
+      els.sampleBtn.addEventListener("click", () => {
+        els.scriptInput.value = sample;
+      });
+
+      els.editBtn.addEventListener("click", () => {
+        pauseAll();
+        els.editor.classList.remove("hidden");
+        setEditorMessage("Use Paste or press and hold inside the text box.");
+        window.setTimeout(() => els.scriptInput.focus(), 50);
+      });
+
+      els.startBtn.addEventListener("click", () => {
+        els.mode.value === "voice" ? startVoice() : startAuto();
+      });
+
+      els.pauseBtn.addEventListener("click", pauseAll);
+      els.resetBtn.addEventListener("click", reset);
+
+      els.fontSize.addEventListener("input", () => {
+        document.documentElement.style.setProperty("--font-size", `${els.fontSize.value}px`);
+        updateHighlight(true);
+      });
+
+      els.lookAhead.addEventListener("input", () => updateHighlight());
+
+      els.speed.addEventListener("input", () => {
+        els.speedValue.textContent = els.speed.value;
+      });
+
+      els.mode.addEventListener("change", () => {
+        pauseAll();
+        els.speedControl.hidden = els.mode.value !== "auto";
+        els.tracking.hidden = els.mode.value !== "voice";
+        els.startBtn.textContent = els.mode.value === "voice" ? "Start listening" : "Start scrolling";
+        recognitionSessionStarted = false;
+        showCaption(
+          els.mode.value === "voice"
+            ? "Voice-follow mode selected."
+            : `Timed mode selected at <strong>${els.speed.value} words per minute</strong>.`
+        );
+      });
+
+      els.tracking.addEventListener("change", () => {
+        showCaption(
+          els.tracking.value === "steady"
+            ? "Steady tracking selected. Stronger phrase confirmation prevents large jumps."
+            : "Responsive tracking selected. It follows faster but allows slightly larger movement."
+        );
+      });
+
+      els.mirrorBtn.addEventListener("click", () => {
+        els.script.classList.toggle("mirrored");
+        els.mirrorBtn.textContent = els.script.classList.contains("mirrored") ? "Unmirror" : "Mirror";
+      });
+
+      els.fullscreenBtn.addEventListener("click", async () => {
+        try {
+          if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
+          else await document.exitFullscreen();
+        } catch (_) {}
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.target === els.scriptInput) return;
+
+        if (event.code === "Space") {
+          event.preventDefault();
+          running ? pauseAll() : (els.mode.value === "voice" ? startVoice() : startAuto());
+        }
+
+        if (event.code === "ArrowLeft") {
+          currentIndex = Math.max(0, currentIndex - 5);
+          autoWordProgress = currentIndex;
+          updateHighlight(true);
+        }
+
+        if (event.code === "ArrowRight") {
+          currentIndex = Math.min(wordData.length - 1, currentIndex + 5);
+          autoWordProgress = currentIndex;
+          updateHighlight(true);
+        }
+      });
+
+      const saved = storageGet("voicePromptScript");
+      els.scriptInput.value = saved || sample;
+      parseScript(saved || sample);
+
+      const mobileToolbarPreference = storageGet("voicePromptToolbarCompact");
+      if (window.matchMedia("(max-width: 760px)").matches) {
+        setToolbarCompact(mobileToolbarPreference === null ? true : mobileToolbarPreference === "1", false);
+      } else {
+        setToolbarCompact(false, false);
+      }
+
+      if (!SpeechRecognition) {
+        showCaption("Voice recognition is unavailable in this browser. Timed scroll still works; use current Chrome or Edge for voice follow.", true);
+      } else {
+        showCaption("Permissions are requested only when you enable the camera or start voice listening. Automatic microphone restarts are disabled.");
+      }
+
+      window.addEventListener("beforeunload", () => {
+        if (mediaRecorder?.state === "recording") mediaRecorder.stop();
+        releaseCameraTracks();
+        if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+      });
+    })();
+  </script>
+</body>
+</html>
