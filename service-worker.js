@@ -1,4 +1,4 @@
-const CACHE_NAME = "voiceprompt-v11-listening-fix";
+const CACHE_NAME = "voiceprompt-v13-version-label";
 const APP_FILES = [
   "./",
   "./index.html",
