@@ -14,7 +14,7 @@
   <link rel="icon" href="favicon.ico" sizes="any" />
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
-  <title>VoicePrompt Teleprompter v1.18</title>
+  <title>VoicePrompt Teleprompter v1.19</title>
   <style>
     :root {
       --bg: #05090a;
@@ -210,6 +210,10 @@
       color: var(--muted);
       font-size: 13px;
       white-space: nowrap;
+    }
+
+    .method-control select {
+      min-width: 142px;
     }
 
     input[type="range"] { accent-color: var(--accent); width: 110px; }
@@ -572,7 +576,7 @@
         flex: 0 1 auto;
       }
 
-      .toolbar:not(.compact) #mode,
+      .toolbar:not(.compact) .method-control,
       .toolbar:not(.compact) #tracking {
         flex: 1 1 160px;
       }
@@ -643,6 +647,12 @@
       }
 
       .toolbar:not(.compact) .control input[type="range"] {
+        grid-area: slider;
+        width: 100%;
+        min-width: 0;
+      }
+
+      .toolbar:not(.compact) .method-control select {
         grid-area: slider;
         width: 100%;
         min-width: 0;
@@ -732,7 +742,7 @@
   <main class="app">
     <header id="toolbar" class="toolbar">
       <div class="brand">Voice<span>Prompt</span></div>
-      <span class="version-badge" aria-label="App version 1.18" title="VoicePrompt version 1.18">v1.18</span>
+      <span class="version-badge" aria-label="App version 1.19" title="VoicePrompt version 1.19">v1.19</span>
 
       <button id="editBtn" title="Open or edit script">Script</button>
       <button id="startBtn" class="primary">Start listening</button>
@@ -752,10 +762,14 @@
         <input id="lookAhead" type="range" min="4" max="28" value="14" />
       </div>
 
-      <select id="mode" class="toolbar-extra" aria-label="Scrolling mode">
-        <option value="voice">Voice follow</option>
-        <option value="auto">Timed scroll</option>
-      </select>
+      <div class="control toolbar-extra method-control">
+        <label for="mode">Method</label>
+        <select id="mode" aria-label="Scrolling method">
+          <option value="voice">Voice match</option>
+          <option value="pace">Speaking pace</option>
+          <option value="auto">Timed scroll</option>
+        </select>
+      </div>
 
       <select id="tracking" class="toolbar-extra" aria-label="Voice tracking sensitivity">
         <option value="steady" selected>Steady tracking</option>
@@ -900,6 +914,26 @@
       let lastRecognitionResultAt = 0;
       let recognitionRebinding = false;
       let recognitionTranscriptTail = [];
+
+      let cameraTransitionActive = false;
+      let cameraRecoveryPending = false;
+      let recognitionWatchdogTimer = null;
+      let recognitionWatchdogRetries = 0;
+      const recognitionWatchdogLimit = 2;
+
+      let paceAudioStream = null;
+      let paceSourceStream = null;
+      let paceOwnsAudioStream = false;
+      let paceAudioContext = null;
+      let paceAnalyser = null;
+      let paceSourceNode = null;
+      let paceFrame = null;
+      let paceLastFrameTime = 0;
+      let paceWordProgress = 0;
+      let paceSpeakingUntil = 0;
+      let paceWasSpeaking = false;
+      let paceNoiseFloor = 0.012;
+      let recordingUsesPaceAudio = false;
 
       const storageGet = (key) => {
         try { return window.localStorage.getItem(key); }
@@ -1087,6 +1121,7 @@ Speak naturally. The page will move with you.`;
       const shouldKeepListening = () =>
         recognitionWanted &&
         !recognitionManualStop &&
+        !cameraTransitionActive &&
         els.mode.value === "voice" &&
         document.visibilityState === "visible";
 
@@ -1133,6 +1168,123 @@ Speak naturally. The page will move with you.`;
         }, delay);
       };
 
+
+      const clearRecognitionWatchdog = () => {
+        if (recognitionWatchdogTimer) {
+          window.clearTimeout(recognitionWatchdogTimer);
+          recognitionWatchdogTimer = null;
+        }
+      };
+
+      const rebuildRecognitionEngine = async ({ resume = true, delay = 450 } = {}) => {
+        const shouldResume =
+          resume &&
+          recognitionWanted &&
+          !recognitionManualStop &&
+          els.mode.value === "voice";
+
+        recognitionRebinding = true;
+        clearRecognitionRestart();
+        clearRecognitionWatchdog();
+
+        const oldRecognition = recognition;
+        recognition = null;
+
+        if (oldRecognition && (running || recognitionStarting)) {
+          await new Promise((resolve) => {
+            let resolved = false;
+            const finish = () => {
+              if (resolved) return;
+              resolved = true;
+              resolve();
+            };
+
+            oldRecognition.addEventListener("end", finish, { once: true });
+            window.setTimeout(finish, 900);
+
+            try {
+              oldRecognition.abort();
+            } catch (_) {
+              try { oldRecognition.stop(); } catch (_) {}
+            }
+          });
+        }
+
+        running = false;
+        recognitionStarting = false;
+        recognitionRebinding = false;
+
+        if (shouldResume) {
+          window.setTimeout(() => {
+            if (shouldKeepListening() && !running && !recognitionStarting) {
+              beginRecognition();
+            }
+          }, delay);
+        }
+      };
+
+      const switchToSpeakingPace = async (reason) => {
+        clearRecognitionWatchdog();
+        cameraRecoveryPending = false;
+        recognitionWatchdogRetries = 0;
+
+        stopVoice();
+        els.mode.value = "pace";
+        els.speedControl.hidden = false;
+        els.tracking.hidden = true;
+
+        showCaption(
+          `${reason} Switching to <strong>Speaking pace</strong>, which scrolls only while your voice is active.`
+        );
+
+        await startPace();
+      };
+
+      const armRecognitionWatchdog = () => {
+        clearRecognitionWatchdog();
+
+        if (
+          !cameraRecoveryPending ||
+          els.mode.value !== "voice" ||
+          !shouldKeepListening()
+        ) {
+          return;
+        }
+
+        const resultBaseline = lastRecognitionResultAt;
+
+        recognitionWatchdogTimer = window.setTimeout(async () => {
+          recognitionWatchdogTimer = null;
+
+          if (
+            !cameraRecoveryPending ||
+            els.mode.value !== "voice" ||
+            !shouldKeepListening()
+          ) {
+            return;
+          }
+
+          if (lastRecognitionResultAt > resultBaseline) {
+            cameraRecoveryPending = false;
+            recognitionWatchdogRetries = 0;
+            return;
+          }
+
+          if (recognitionWatchdogRetries < recognitionWatchdogLimit) {
+            recognitionWatchdogRetries += 1;
+            showCaption(
+              `Camera recovery ${recognitionWatchdogRetries}/${recognitionWatchdogLimit}: rebuilding voice recognition…`
+            );
+            await rebuildRecognitionEngine({ resume: true, delay: 500 });
+            return;
+          }
+
+          await switchToSpeakingPace(
+            "Samsung did not return speech results after two fresh recognition attempts."
+          );
+        }, 4000);
+      };
+
       const buildRecognition = () => {
         if (!SpeechRecognition) return null;
 
@@ -1157,11 +1309,18 @@ Speak naturally. The page will move with you.`;
               ? "Video is recording and voice-follow is listening."
               : "Listening… pauses and breaths will reconnect automatically."
           );
+          armRecognitionWatchdog();
         };
 
         instance.onresult = (event) => {
           lastRecognitionResultAt = Date.now();
           recognitionRestartAttempts = 0;
+
+          if (cameraRecoveryPending) {
+            cameraRecoveryPending = false;
+            recognitionWatchdogRetries = 0;
+            clearRecognitionWatchdog();
+          }
 
           let sessionTranscript = "";
           for (let i = 0; i < event.results.length; i++) {
@@ -1248,6 +1407,7 @@ Speak naturally. The page will move with you.`;
         instance.onend = () => {
           recognitionStarting = false;
           running = false;
+          clearRecognitionWatchdog();
 
           if (recognitionRebinding) {
             clearRecognitionRestart();
@@ -1258,7 +1418,12 @@ Speak naturally. The page will move with you.`;
             clearRecognitionRestart();
             els.startBtn.disabled = false;
             els.pauseBtn.disabled = true;
-            els.startBtn.textContent = els.mode.value === "voice" ? "Start listening" : "Start scrolling";
+            els.startBtn.textContent =
+          els.mode.value === "voice"
+            ? "Start listening"
+            : els.mode.value === "pace"
+              ? "Start speaking pace"
+              : "Start scrolling";
             setStatus(recognitionManualStop ? "Paused" : "Ready");
             return;
           }
@@ -1285,9 +1450,9 @@ Speak naturally. The page will move with you.`;
         return div.innerHTML;
       };
 
-      const startVoice = () => {
+      const startVoice = async () => {
         if (!SpeechRecognition) {
-          showCaption("This browser does not provide speech recognition. Try the latest Chrome or Edge, or use Timed scroll mode.", true);
+          showCaption("This browser does not provide speech recognition. Use Speaking pace or Timed scroll mode.", true);
           setStatus("Unsupported");
           return;
         }
@@ -1298,6 +1463,7 @@ Speak naturally. The page will move with you.`;
         }
 
         clearRecognitionRestart();
+        clearRecognitionWatchdog();
         recognitionWanted = true;
         recognitionManualStop = false;
         recognitionRestartAttempts = 0;
@@ -1305,11 +1471,22 @@ Speak naturally. The page will move with you.`;
         els.pauseBtn.disabled = false;
         els.startBtn.textContent = "Starting…";
         setStatus("Starting…", true);
+
+        if (hasLiveTrack("video")) {
+          cameraRecoveryPending = true;
+          recognitionWatchdogRetries = 0;
+          lastRecognitionResultAt = 0;
+          await rebuildRecognitionEngine({ resume: false });
+        }
+
         beginRecognition();
       };
 
       const stopVoice = () => {
         clearRecognitionRestart();
+        clearRecognitionWatchdog();
+        cameraRecoveryPending = false;
+        recognitionWatchdogRetries = 0;
         recognitionWanted = false;
         recognitionManualStop = true;
         recognitionStarting = false;
@@ -1323,6 +1500,168 @@ Speak naturally. The page will move with you.`;
         els.pauseBtn.disabled = true;
         els.startBtn.textContent = els.mode.value === "voice" ? "Start listening" : "Start scrolling";
         setStatus("Paused");
+      };
+
+
+      const hasLiveAudioStream = (stream) =>
+        Boolean(stream?.getAudioTracks?.().some((track) => track.readyState === "live"));
+
+      const releasePaceAudio = () => {
+        if (paceOwnsAudioStream && paceAudioStream) {
+          paceAudioStream.getTracks().forEach((track) => track.stop());
+        }
+        paceAudioStream = null;
+        paceSourceStream = null;
+        paceOwnsAudioStream = false;
+      };
+
+      const stopPace = (releaseAudio = true) => {
+        if (paceFrame) cancelAnimationFrame(paceFrame);
+        paceFrame = null;
+
+        try { paceSourceNode?.disconnect(); } catch (_) {}
+        paceSourceNode = null;
+        paceAnalyser = null;
+
+        if (paceAudioContext) {
+          paceAudioContext.close().catch(() => {});
+        }
+        paceAudioContext = null;
+
+        if (
+          releaseAudio &&
+          mediaRecorder?.state !== "recording" &&
+          mediaRecorder?.state !== "paused"
+        ) {
+          releasePaceAudio();
+        }
+
+        paceWasSpeaking = false;
+        paceSpeakingUntil = 0;
+      };
+
+      const paceTick = (now) => {
+        if (!running || els.mode.value !== "pace" || !paceAnalyser) return;
+
+        const elapsedMinutes = Math.max(0, now - paceLastFrameTime) / 60000;
+        paceLastFrameTime = now;
+
+        const samples = new Uint8Array(paceAnalyser.fftSize);
+        paceAnalyser.getByteTimeDomainData(samples);
+
+        let energy = 0;
+        for (const sample of samples) {
+          const normalized = (sample - 128) / 128;
+          energy += normalized * normalized;
+        }
+
+        const rms = Math.sqrt(energy / samples.length);
+        const threshold = Math.max(0.024, paceNoiseFloor * 2.25);
+
+        if (rms < threshold) {
+          paceNoiseFloor = paceNoiseFloor * 0.985 + rms * 0.015;
+        } else {
+          paceSpeakingUntil = now + 420;
+        }
+
+        const speaking = now < paceSpeakingUntil;
+
+        if (speaking) {
+          paceWordProgress += elapsedMinutes * Number(els.speed.value);
+          const nextIndex = Math.min(wordData.length - 1, Math.floor(paceWordProgress));
+
+          if (nextIndex !== currentIndex) {
+            currentIndex = nextIndex;
+            updateHighlight();
+          }
+        }
+
+        if (speaking !== paceWasSpeaking) {
+          paceWasSpeaking = speaking;
+          setStatus(
+            speaking ? "Speaking · scrolling" : "Speaking pace · waiting",
+            speaking
+          );
+        }
+
+        if (currentIndex >= wordData.length - 1) {
+          pauseAll();
+          setStatus("Finished");
+          return;
+        }
+
+        paceFrame = requestAnimationFrame(paceTick);
+      };
+
+      const startPace = async () => {
+        if (!wordData.length) {
+          els.editor.classList.remove("hidden");
+          return;
+        }
+
+        stopVoice();
+        stopPace(false);
+
+        try {
+          if (hasLiveAudioStream(recordingAudioStream)) {
+            paceSourceStream = recordingAudioStream;
+            paceOwnsAudioStream = false;
+          } else if (hasLiveAudioStream(paceAudioStream)) {
+            paceSourceStream = paceAudioStream;
+            paceOwnsAudioStream = true;
+          } else {
+            paceAudioStream = await navigator.mediaDevices.getUserMedia({
+              video: false,
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+              }
+            });
+            paceSourceStream = paceAudioStream;
+            paceOwnsAudioStream = true;
+          }
+
+          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+          if (!AudioContextClass) throw new Error("Audio analysis is unavailable.");
+
+          paceAudioContext = new AudioContextClass();
+          await paceAudioContext.resume();
+
+          paceAnalyser = paceAudioContext.createAnalyser();
+          paceAnalyser.fftSize = 1024;
+          paceAnalyser.smoothingTimeConstant = 0.35;
+
+          paceSourceNode = paceAudioContext.createMediaStreamSource(paceSourceStream);
+          paceSourceNode.connect(paceAnalyser);
+
+          running = true;
+          paceWordProgress = currentIndex;
+          paceLastFrameTime = performance.now();
+          paceSpeakingUntil = 0;
+          paceWasSpeaking = false;
+          paceNoiseFloor = 0.012;
+
+          els.startBtn.disabled = true;
+          els.pauseBtn.disabled = false;
+          els.startBtn.textContent = "Speaking pace";
+          setStatus("Speaking pace · waiting");
+          showCaption(
+            `Speaking pace is ready at <strong>${els.speed.value} WPM</strong>. The text moves while you speak and pauses when you stop.`
+          );
+
+          paceFrame = requestAnimationFrame(paceTick);
+        } catch (error) {
+          stopPace(true);
+          running = false;
+          els.startBtn.disabled = false;
+          els.pauseBtn.disabled = true;
+          setStatus("Microphone unavailable");
+          showCaption(
+            `Unable to start Speaking pace: <strong>${escapeHtml(error?.message || "microphone unavailable")}</strong>`,
+            true
+          );
+        }
       };
 
       const startAuto = () => {
@@ -1359,11 +1698,20 @@ Speak naturally. The page will move with you.`;
 
       const pauseAll = () => {
         stopVoice();
+        stopPace(true);
         running = false;
+
         if (autoFrame) cancelAnimationFrame(autoFrame);
         autoFrame = null;
+
         els.startBtn.disabled = false;
         els.pauseBtn.disabled = true;
+        els.startBtn.textContent =
+          els.mode.value === "voice"
+            ? "Start listening"
+            : els.mode.value === "pace"
+              ? "Start speaking pace"
+              : "Start scrolling";
         setStatus("Paused");
       };
 
@@ -1371,6 +1719,7 @@ Speak naturally. The page will move with you.`;
         pauseAll();
         currentIndex = 0;
         autoWordProgress = 0;
+        paceWordProgress = 0;
         els.reader.scrollTop = 0;
         updateHighlight(true);
         showCaption("Reset to the beginning.");
@@ -1430,14 +1779,22 @@ Speak naturally. The page will move with you.`;
           return false;
         }
 
-        // Camera preview uses video only. On Samsung mobile, requesting audio
-        // here can take the microphone away from SpeechRecognition and stop
-        // voice-follow scrolling even when no video is being recorded.
         if (hasLiveTrack("video")) {
           cameraVisible = true;
           updateCameraUi();
-          showCaption("Camera preview ready. Voice listening remains separate.");
+          showCaption("Camera preview ready.");
           return true;
+        }
+
+        const resumeVoice =
+          els.mode.value === "voice" &&
+          recognitionWanted &&
+          !recognitionManualStop;
+
+        cameraTransitionActive = true;
+
+        if (resumeVoice) {
+          await rebuildRecognitionEngine({ resume: false });
         }
 
         try {
@@ -1452,17 +1809,32 @@ Speak naturally. The page will move with you.`;
           });
 
           await attachCameraStream(stream);
-          showCaption("Camera preview enabled. Microphone audio will be requested only when recording begins.");
+          cameraTransitionActive = false;
 
-          // A mobile permission screen can briefly end speech recognition.
-          // Resume it quietly without changing the reader's position.
-          if (shouldKeepListening() && !running && !recognitionStarting) {
-            scheduleRecognitionRestart(350);
+          if (resumeVoice) {
+            recognitionWanted = true;
+            recognitionManualStop = false;
+            cameraRecoveryPending = true;
+            recognitionWatchdogRetries = 0;
+            lastRecognitionResultAt = 0;
+
+            showCaption("Camera ready. Starting a fresh voice-recognition engine…");
+            window.setTimeout(beginRecognition, 500);
+          } else {
+            showCaption("Camera preview enabled. Choose a scrolling method when ready.");
           }
 
           return true;
         } catch (error) {
+          cameraTransitionActive = false;
           releaseCameraTracks();
+
+          if (resumeVoice) {
+            recognitionWanted = true;
+            recognitionManualStop = false;
+            window.setTimeout(beginRecognition, 350);
+          }
+
           const message = error?.name === "NotAllowedError"
             ? "Camera permission was denied. Allow camera access and try again."
             : `Unable to start camera: ${escapeHtml(error?.message || "unknown error")}`;
@@ -1518,7 +1890,10 @@ Speak naturally. The page will move with you.`;
       const finishRecording = () => {
         window.clearInterval(recordingTimer);
         recordingTimer = null;
+
+        pauseAll();
         releaseRecordingAudio();
+        recordingUsesPaceAudio = false;
         els.recordBtn.classList.remove("recording");
         els.recordBtn.innerHTML = '● Rec <span id="recordingTime" class="recording-time">00:00</span>';
         els.recordingTime = document.getElementById("recordingTime");
@@ -1538,38 +1913,14 @@ Speak naturally. The page will move with you.`;
         showRecordingPreview();
       };
 
-      const stopRecognitionForSharedMicRebind = async () => {
-        if (!recognition || (!running && !recognitionStarting)) return;
-
-        recognitionRebinding = true;
-        clearRecognitionRestart();
-
-        await new Promise((resolve) => {
-          let resolved = false;
-          const finish = () => {
-            if (resolved) return;
-            resolved = true;
-            resolve();
-          };
-
-          recognition.addEventListener("end", finish, { once: true });
-          window.setTimeout(finish, 850);
-
-          try {
-            recognition.abort();
-          } catch (_) {
-            try { recognition.stop(); } catch (_) {}
-          }
-        });
-
-        running = false;
-        recognitionStarting = false;
-      };
-
-      const resumeRecognitionAfterRecordingStarts = (delay = 650) => {
+      const resumeFreshRecognitionAfterRecordingStarts = (delay = 750) => {
         recognitionRebinding = false;
 
         if (!shouldKeepListening()) return;
+
+        cameraRecoveryPending = true;
+        recognitionWatchdogRetries = 0;
+        lastRecognitionResultAt = 0;
 
         window.setTimeout(() => {
           if (shouldKeepListening() && !running && !recognitionStarting) {
@@ -1597,28 +1948,37 @@ Speak naturally. The page will move with you.`;
           !recognitionManualStop &&
           els.mode.value === "voice";
 
-        // Temporarily end browser speech recognition before requesting the
-        // recording microphone. After MediaRecorder starts, recognition gets
-        // a fresh mobile session.
         if (shouldResumeVoice) {
-          await stopRecognitionForSharedMicRebind();
+          await rebuildRecognitionEngine({ resume: false });
         }
 
         try {
           releaseRecordingAudio();
+          recordingUsesPaceAudio = false;
 
-          recordingAudioStream = await navigator.mediaDevices.getUserMedia({
-            video: false,
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true
-            }
-          });
+          let audioTracks = [];
+
+          if (
+            els.mode.value === "pace" &&
+            hasLiveAudioStream(paceSourceStream)
+          ) {
+            audioTracks = paceSourceStream.getAudioTracks();
+            recordingUsesPaceAudio = true;
+          } else {
+            recordingAudioStream = await navigator.mediaDevices.getUserMedia({
+              video: false,
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+              }
+            });
+            audioTracks = recordingAudioStream.getAudioTracks();
+          }
 
           recordingStream = new MediaStream([
             ...cameraStream.getVideoTracks(),
-            ...recordingAudioStream.getAudioTracks()
+            ...audioTracks
           ]);
 
           recordedChunks = [];
@@ -1649,17 +2009,24 @@ Speak naturally. The page will move with you.`;
           mediaRecorder.start(1000);
 
           if (shouldResumeVoice) {
-            resumeRecognitionAfterRecordingStarts(750);
-            showCaption("Recording started. Restarting voice-follow on mobile…");
+            recognitionWanted = true;
+            recognitionManualStop = false;
+            resumeFreshRecognitionAfterRecordingStarts(800);
+            showCaption("Recording started. Testing a fresh Voice Match session…");
+          } else if (els.mode.value === "pace") {
+            showCaption("Recording with Speaking pace using the same microphone audio.");
           } else {
             recognitionRebinding = false;
             showCaption("Recording video and microphone audio.");
           }
         } catch (error) {
           recognitionRebinding = false;
+          recordingUsesPaceAudio = false;
           releaseRecordingAudio();
 
           if (shouldResumeVoice) {
+            recognitionWanted = true;
+            recognitionManualStop = false;
             window.setTimeout(beginRecognition, 350);
           }
 
@@ -1672,11 +2039,23 @@ Speak naturally. The page will move with you.`;
 
       const stopRecording = () => {
         if (mediaRecorder?.state === "recording" || mediaRecorder?.state === "paused") {
-          // Ending a take should end voice-follow as well. This is an intentional
-          // pause, so the mobile auto-reconnect loop will remain stopped.
-          pauseAll();
+          clearRecognitionWatchdog();
+          cameraRecoveryPending = false;
+
+          if (els.mode.value === "voice") {
+            stopVoice();
+          } else if (els.mode.value === "pace") {
+            stopPace(false);
+            running = false;
+          } else {
+            running = false;
+            if (autoFrame) cancelAnimationFrame(autoFrame);
+            autoFrame = null;
+          }
+
+          setStatus("Stopping recording");
           mediaRecorder.stop();
-          showCaption("Recording stopped. Voice listening is paused.");
+          showCaption("Recording stopped. Listening and scrolling are paused.");
         }
       };
 
@@ -1718,11 +2097,19 @@ Speak naturally. The page will move with you.`;
 
         if (!navigator.mediaDevices?.getUserMedia) return;
 
+        const resumeVoice =
+          els.mode.value === "voice" &&
+          recognitionWanted &&
+          !recognitionManualStop;
+
         const nextFacingMode = currentFacingMode === "user" ? "environment" : "user";
+        cameraTransitionActive = true;
+
+        if (resumeVoice) {
+          await rebuildRecognitionEngine({ resume: false });
+        }
 
         try {
-          // Switching cameras remains video-only so voice recognition keeps
-          // ownership of its microphone session.
           const videoOnlyStream = await navigator.mediaDevices.getUserMedia({
             video: {
               facingMode: { ideal: nextFacingMode },
@@ -1737,12 +2124,28 @@ Speak naturally. The page will move with you.`;
 
           currentFacingMode = nextFacingMode;
           await attachCameraStream(videoOnlyStream);
-          showCaption("Camera switched without changing the microphone session.");
+          cameraTransitionActive = false;
 
-          if (shouldKeepListening() && !running && !recognitionStarting) {
-            scheduleRecognitionRestart(350);
+          if (resumeVoice) {
+            recognitionWanted = true;
+            recognitionManualStop = false;
+            cameraRecoveryPending = true;
+            recognitionWatchdogRetries = 0;
+            lastRecognitionResultAt = 0;
+            showCaption("Camera switched. Starting a fresh Voice Match engine…");
+            window.setTimeout(beginRecognition, 500);
+          } else {
+            showCaption("Camera switched.");
           }
         } catch (error) {
+          cameraTransitionActive = false;
+
+          if (resumeVoice) {
+            recognitionWanted = true;
+            recognitionManualStop = false;
+            window.setTimeout(beginRecognition, 350);
+          }
+
           showCaption(`Unable to switch cameras: ${escapeHtml(error?.message || "unknown error")}`, true);
         }
       };
@@ -1853,9 +2256,17 @@ Speak naturally. The page will move with you.`;
         window.setTimeout(() => els.scriptInput.focus(), 50);
       });
 
-      els.startBtn.addEventListener("click", () => {
-        els.mode.value === "voice" ? startVoice() : startAuto();
-      });
+      const startSelectedMethod = () => {
+        if (els.mode.value === "voice") {
+          startVoice();
+        } else if (els.mode.value === "pace") {
+          startPace();
+        } else {
+          startAuto();
+        }
+      };
+
+      els.startBtn.addEventListener("click", startSelectedMethod);
 
       els.pauseBtn.addEventListener("click", pauseAll);
       els.resetBtn.addEventListener("click", reset);
@@ -1869,19 +2280,39 @@ Speak naturally. The page will move with you.`;
 
       els.speed.addEventListener("input", () => {
         els.speedValue.textContent = els.speed.value;
+
+        if (els.mode.value === "pace" && running) {
+          showCaption(
+            `Speaking pace updated to <strong>${els.speed.value} WPM</strong>.`
+          );
+        }
       });
 
       els.mode.addEventListener("change", () => {
         pauseAll();
-        els.speedControl.hidden = els.mode.value !== "auto";
+
+        els.speedControl.hidden = els.mode.value === "voice";
         els.tracking.hidden = els.mode.value !== "voice";
-        els.startBtn.textContent = els.mode.value === "voice" ? "Start listening" : "Start scrolling";
-        recognitionSessionStarted = false;
-        showCaption(
+        els.startBtn.textContent =
           els.mode.value === "voice"
-            ? "Voice-follow mode selected."
-            : `Timed mode selected at <strong>${els.speed.value} words per minute</strong>.`
-        );
+            ? "Start listening"
+            : els.mode.value === "pace"
+              ? "Start speaking pace"
+              : "Start scrolling";
+
+        recognitionSessionStarted = false;
+
+        if (els.mode.value === "voice") {
+          showCaption("Voice Match selected. It follows the exact words it recognizes.");
+        } else if (els.mode.value === "pace") {
+          showCaption(
+            `Speaking pace selected at <strong>${els.speed.value} WPM</strong>. It moves while you speak and pauses during silence.`
+          );
+        } else {
+          showCaption(
+            `Timed scroll selected at <strong>${els.speed.value} words per minute</strong>.`
+          );
+        }
       });
 
       els.tracking.addEventListener("change", () => {
@@ -1909,7 +2340,7 @@ Speak naturally. The page will move with you.`;
 
         if (event.code === "Space") {
           event.preventDefault();
-          running ? pauseAll() : (els.mode.value === "voice" ? startVoice() : startAuto());
+          running ? pauseAll() : startSelectedMethod();
         }
 
         if (event.code === "ArrowLeft") {
@@ -1944,12 +2375,13 @@ Speak naturally. The page will move with you.`;
       if (!SpeechRecognition) {
         showCaption("Voice recognition is unavailable in this browser. Timed scroll still works; use current Chrome or Edge for voice follow.", true);
       } else {
-        showCaption("v1.18 keeps camera preview separate from the microphone. Stopping a recording also pauses listening.");
+        showCaption("v1.19 adds camera-first Voice Match recovery, a four-second watchdog, and Speaking pace mode.");
       }
 
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "hidden") {
           clearRecognitionRestart();
+          clearRecognitionWatchdog();
           return;
         }
 
@@ -1960,6 +2392,7 @@ Speak naturally. The page will move with you.`;
 
       window.addEventListener("beforeunload", () => {
         if (mediaRecorder?.state === "recording") mediaRecorder.stop();
+        stopPace(true);
         releaseRecordingAudio();
         releaseCameraTracks();
         if (recordingUrl) URL.revokeObjectURL(recordingUrl);
