@@ -14,7 +14,7 @@
   <link rel="icon" href="favicon.ico" sizes="any" />
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
-  <title>VoicePrompt Teleprompter</title>
+  <title>VoicePrompt Teleprompter v10</title>
   <style>
     :root {
       --bg: #05090a;
@@ -65,6 +65,30 @@
       border-color: var(--accent);
       color: #031211;
       font-weight: 800;
+    }
+
+    #editBtn {
+      background: #4c5659;
+      border-color: #697578;
+      color: #ffffff;
+      font-weight: 750;
+    }
+
+    #editBtn:hover {
+      background: #596568;
+      border-color: #879396;
+    }
+
+    #resetBtn {
+      background: #f1c84b;
+      border-color: #f7d86e;
+      color: #201a05;
+      font-weight: 850;
+    }
+
+    #resetBtn:hover {
+      background: #f8d667;
+      border-color: #ffe599;
     }
 
     .danger {
@@ -479,6 +503,19 @@
         display: inline-flex;
       }
 
+      .toolbar:not(.compact) #resetBtn {
+        flex: 0 1 auto;
+      }
+
+      .toolbar:not(.compact) #mode,
+      .toolbar:not(.compact) #tracking {
+        flex: 1 1 160px;
+      }
+
+      .toolbar:not(.compact) #speedControl[hidden] {
+        display: none !important;
+      }
+
       .toolbar.compact {
         flex-wrap: nowrap;
       }
@@ -510,8 +547,53 @@
         white-space: nowrap;
       }
 
-      .control label { display: none; }
-      .control input[type="range"] { width: 92px; }
+      .toolbar.compact .control label {
+        display: none;
+      }
+
+      .toolbar:not(.compact) .control {
+        flex: 1 1 132px;
+        min-width: 132px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+          "label value"
+          "slider slider";
+        align-items: center;
+        gap: 7px 10px;
+        padding: 10px 11px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.035);
+      }
+
+      .toolbar:not(.compact) .control label {
+        display: block;
+        grid-area: label;
+        color: #f5f7f7;
+        font-size: 12px;
+        font-weight: 850;
+        letter-spacing: 0.025em;
+        text-transform: uppercase;
+      }
+
+      .toolbar:not(.compact) .control input[type="range"] {
+        grid-area: slider;
+        width: 100%;
+        min-width: 0;
+      }
+
+      .toolbar:not(.compact) #speedValue {
+        grid-area: value;
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 850;
+      }
+
+      .toolbar.compact .control input[type="range"] {
+        width: 92px;
+      }
+
       .spacer { display: none; }
 
       .status {
@@ -588,14 +670,14 @@
     <header id="toolbar" class="toolbar">
       <div class="brand">Voice<span>Prompt</span></div>
 
-      <button id="editBtn">Edit</button>
+      <button id="editBtn" title="Edit script">Edit</button>
       <button id="startBtn" class="primary">Start listening</button>
       <button id="pauseBtn" disabled>Pause</button>
       <button id="cameraBtn" type="button">Enable camera</button>
       <button id="recordBtn" class="record-button" type="button" disabled>● Rec <span id="recordingTime" class="recording-time">00:00</span></button>
       <button id="toolbarToggle" class="toolbar-toggle" type="button" aria-controls="toolbar" aria-expanded="true">Less ↑</button>
 
-      <button id="resetBtn" class="toolbar-extra">Reset</button>
+      <button id="resetBtn" class="toolbar-extra" title="Reset to beginning">Reset</button>
 
       <div class="control toolbar-extra">
         <label for="fontSize">Text</label>
@@ -749,6 +831,10 @@
       let recognitionRestartAttempts = 0;
       let lastRecognitionStartedAt = 0;
       let lastRecognitionResultAt = 0;
+      let recognitionAudioTrack = null;
+      let recognitionStartedWithSharedTrack = false;
+      let recognitionRebinding = false;
+      let sharedTrackStartSupported = true;
 
       const storageGet = (key) => {
         try { return window.localStorage.getItem(key); }
@@ -939,6 +1025,11 @@ Speak naturally. The page will move with you.`;
         els.mode.value === "voice" &&
         document.visibilityState === "visible";
 
+      const getLiveSharedAudioTrack = () => {
+        const track = recognitionAudioTrack || cameraStream?.getAudioTracks?.()[0] || null;
+        return track?.kind === "audio" && track.readyState === "live" ? track : null;
+      };
+
       const beginRecognition = () => {
         if (!shouldKeepListening() || recognitionStarting || running) return;
 
@@ -946,15 +1037,38 @@ Speak naturally. The page will move with you.`;
         if (!recognition) return;
 
         recognitionStarting = true;
+        recognitionStartedWithSharedTrack = false;
+
+        const sharedAudioTrack = getLiveSharedAudioTrack();
+
         try {
-          recognition.start();
+          if (sharedAudioTrack && sharedTrackStartSupported) {
+            // Feed the same live microphone track to both SpeechRecognition and
+            // MediaRecorder. This prevents Android from treating them as two
+            // separate applications competing for the microphone.
+            recognition.start(sharedAudioTrack);
+            recognitionStartedWithSharedTrack = true;
+          } else {
+            recognition.start();
+          }
         } catch (error) {
           recognitionStarting = false;
 
-          // Android Chrome can briefly report that recognition is still stopping.
-          // Retry quietly instead of making the user press the button again.
+          // Some browsers expose SpeechRecognition but do not yet support
+          // start(audioTrack). Fall back to the browser-managed microphone.
+          if (sharedAudioTrack && sharedTrackStartSupported) {
+            sharedTrackStartSupported = false;
+            try {
+              recognitionStarting = true;
+              recognition.start();
+              return;
+            } catch (_) {
+              recognitionStarting = false;
+            }
+          }
+
           if (shouldKeepListening()) {
-            scheduleRecognitionRestart(350);
+            scheduleRecognitionRestart(450);
           }
         }
       };
@@ -997,8 +1111,12 @@ Speak naturally. The page will move with you.`;
           els.startBtn.disabled = true;
           els.pauseBtn.disabled = false;
           els.startBtn.textContent = "Listening";
-          setStatus("Listening", true);
-          showCaption("Listening… pauses and breaths will reconnect automatically.");
+          setStatus(recognitionStartedWithSharedTrack ? "Listening · shared mic" : "Listening", true);
+          showCaption(
+            recognitionStartedWithSharedTrack
+              ? "Listening through the same microphone track used by video recording."
+              : "Listening… pauses and breaths will reconnect automatically."
+          );
         };
 
         instance.onresult = (event) => {
@@ -1029,6 +1147,10 @@ Speak naturally. The page will move with you.`;
         instance.onerror = (event) => {
           recognitionStarting = false;
 
+          if (recognitionRebinding && event.error === "aborted") {
+            return;
+          }
+
           if (event.error === "not-allowed" || event.error === "service-not-allowed") {
             clearRecognitionRestart();
             recognitionWanted = false;
@@ -1043,8 +1165,13 @@ Speak naturally. The page will move with you.`;
           }
 
           if (event.error === "audio-capture") {
-            setStatus("Microphone unavailable");
-            showCaption("The microphone is busy or unavailable. Stop another recording app, then press Start listening.", true);
+            setStatus("Microphone conflict");
+            showCaption(
+              mediaRecorder?.state === "recording"
+                ? "This browser could not share the recording microphone with voice-follow. Stop recording and try again."
+                : "The microphone is busy or unavailable. Stop another recording app, then press Start listening.",
+              true
+            );
             return;
           }
 
@@ -1057,6 +1184,11 @@ Speak naturally. The page will move with you.`;
         instance.onend = () => {
           recognitionStarting = false;
           running = false;
+
+          if (recognitionRebinding) {
+            clearRecognitionRestart();
+            return;
+          }
 
           if (!shouldKeepListening()) {
             clearRecognitionRestart();
@@ -1105,6 +1237,10 @@ Speak naturally. The page will move with you.`;
         recognitionWanted = true;
         recognitionManualStop = false;
         recognitionRestartAttempts = 0;
+        recognitionAudioTrack =
+          mediaRecorder?.state === "recording"
+            ? (cameraStream?.getAudioTracks?.()[0] || null)
+            : recognitionAudioTrack;
         els.startBtn.disabled = true;
         els.pauseBtn.disabled = false;
         els.startBtn.textContent = "Starting…";
@@ -1215,6 +1351,8 @@ Speak naturally. The page will move with you.`;
           cameraStream.getTracks().forEach((track) => track.stop());
         }
         cameraStream = null;
+        recognitionAudioTrack = null;
+        recognitionStartedWithSharedTrack = false;
         cameraVisible = false;
         els.cameraPreview.srcObject = null;
         updateCameraUi();
@@ -1329,6 +1467,50 @@ Speak naturally. The page will move with you.`;
         showRecordingPreview();
       };
 
+      const stopRecognitionForSharedMicRebind = async () => {
+        if (!recognition || (!running && !recognitionStarting)) return;
+
+        recognitionRebinding = true;
+        clearRecognitionRestart();
+
+        await new Promise((resolve) => {
+          let resolved = false;
+          const finish = () => {
+            if (resolved) return;
+            resolved = true;
+            resolve();
+          };
+
+          recognition.addEventListener("end", finish, { once: true });
+          window.setTimeout(finish, 850);
+
+          try {
+            recognition.abort();
+          } catch (_) {
+            try { recognition.stop(); } catch (_) {}
+          }
+        });
+
+        running = false;
+        recognitionStarting = false;
+      };
+
+      const resumeRecognitionOnSharedMic = (delay = 360) => {
+        const sharedAudioTrack = cameraStream?.getAudioTracks?.()[0] || null;
+        recognitionAudioTrack =
+          sharedAudioTrack?.readyState === "live" ? sharedAudioTrack : null;
+
+        recognitionRebinding = false;
+
+        if (!shouldKeepListening()) return;
+
+        window.setTimeout(() => {
+          if (shouldKeepListening() && !running && !recognitionStarting) {
+            beginRecognition();
+          }
+        }, delay);
+      };
+
       const startRecording = async () => {
         if (!window.MediaRecorder) {
           showCaption("Video recording is not supported by this browser.", true);
@@ -1342,6 +1524,19 @@ Speak naturally. The page will move with you.`;
 
         cameraVisible = true;
         updateCameraUi();
+
+        const shouldResumeVoice =
+          recognitionWanted &&
+          !recognitionManualStop &&
+          els.mode.value === "voice";
+
+        // Android may stop browser-managed speech recognition the moment
+        // MediaRecorder begins using the microphone. Stop that recognition
+        // session first, start recording, then reconnect recognition to the
+        // exact same live audio track used by the recorder.
+        if (shouldResumeVoice) {
+          await stopRecognitionForSharedMicRebind();
+        }
 
         try {
           recordedChunks = [];
@@ -1368,9 +1563,24 @@ Speak naturally. The page will move with you.`;
           els.flipCameraBtn.disabled = true;
           updateRecordingTimer();
           recordingTimer = window.setInterval(updateRecordingTimer, 500);
+
           mediaRecorder.start(1000);
-          showCaption("Recording video and microphone audio.");
+
+          if (shouldResumeVoice) {
+            resumeRecognitionOnSharedMic(420);
+            showCaption("Recording started. Reconnecting voice-follow to the shared microphone…");
+          } else {
+            recognitionRebinding = false;
+            showCaption("Recording video and microphone audio.");
+          }
         } catch (error) {
+          recognitionRebinding = false;
+
+          if (shouldResumeVoice) {
+            recognitionAudioTrack = null;
+            window.setTimeout(beginRecognition, 250);
+          }
+
           showCaption(`Unable to record: ${escapeHtml(error?.message || "unknown error")}`, true);
         }
       };
@@ -1644,7 +1854,7 @@ Speak naturally. The page will move with you.`;
       if (!SpeechRecognition) {
         showCaption("Voice recognition is unavailable in this browser. Timed scroll still works; use current Chrome or Edge for voice follow.", true);
       } else {
-        showCaption("Voice listening reconnects automatically after breaths and short pauses. Press Pause when you want it to stop.");
+        showCaption("Voice-follow and video recording now share one microphone track on supported mobile browsers.");
       }
 
       document.addEventListener("visibilitychange", () => {
