@@ -14,7 +14,7 @@
   <link rel="icon" href="favicon.ico" sizes="any" />
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
-  <title>VoicePrompt Teleprompter v13</title>
+  <title>VoicePrompt Teleprompter v1.18</title>
   <style>
     :root {
       --bg: #05090a;
@@ -732,7 +732,7 @@
   <main class="app">
     <header id="toolbar" class="toolbar">
       <div class="brand">Voice<span>Prompt</span></div>
-      <span class="version-badge" aria-label="App version 13" title="VoicePrompt version 13">v13</span>
+      <span class="version-badge" aria-label="App version 1.18" title="VoicePrompt version 1.18">v1.18</span>
 
       <button id="editBtn" title="Open or edit script">Script</button>
       <button id="startBtn" class="primary">Start listening</button>
@@ -769,7 +769,6 @@
       </div>
 
       <button id="flipCameraBtn" class="toolbar-extra" type="button" disabled>Flip camera</button>
-      <button id="stopCameraBtn" class="toolbar-extra" type="button" disabled>Hide camera</button>
       <button id="mirrorBtn" class="toolbar-extra">Mirror</button>
       <button id="fullscreenBtn" class="toolbar-extra">Full screen</button>
 
@@ -848,7 +847,6 @@
         recordBtn: document.getElementById("recordBtn"),
         recordingTime: document.getElementById("recordingTime"),
         flipCameraBtn: document.getElementById("flipCameraBtn"),
-        stopCameraBtn: document.getElementById("stopCameraBtn"),
         cameraLayer: document.getElementById("cameraLayer"),
         cameraPreview: document.getElementById("cameraPreview"),
         recordReview: document.getElementById("recordReview"),
@@ -882,6 +880,8 @@
       let lastFrameTime = 0;
       let autoWordProgress = 0;
       let cameraStream = null;
+      let recordingAudioStream = null;
+      let recordingStream = null;
       let mediaRecorder = null;
       let recordedChunks = [];
       let recordedBlob = null;
@@ -1403,8 +1403,6 @@ Speak naturally. The page will move with you.`;
             : "Show cam";
         els.recordBtn.disabled = !cameraReady;
         els.flipCameraBtn.disabled = !cameraReady;
-        els.stopCameraBtn.disabled = !cameraReady;
-        els.stopCameraBtn.textContent = cameraVisible ? "Hide camera" : "Show camera";
       };
 
       const releaseCameraTracks = () => {
@@ -1432,11 +1430,13 @@ Speak naturally. The page will move with you.`;
           return false;
         }
 
-        // Reuse the already-authorized stream rather than asking for permission again.
-        if (hasLiveTrack("video") && hasLiveTrack("audio")) {
+        // Camera preview uses video only. On Samsung mobile, requesting audio
+        // here can take the microphone away from SpeechRecognition and stop
+        // voice-follow scrolling even when no video is being recorded.
+        if (hasLiveTrack("video")) {
           cameraVisible = true;
           updateCameraUi();
-          showCaption("Camera ready. The existing camera and microphone session is being reused.");
+          showCaption("Camera preview ready. Voice listening remains separate.");
           return true;
         }
 
@@ -1448,20 +1448,23 @@ Speak naturally. The page will move with you.`;
               height: { ideal: 1080 },
               frameRate: { ideal: 30, max: 30 }
             },
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true
-            }
+            audio: false
           });
 
           await attachCameraStream(stream);
-          showCaption("Camera and microphone enabled for this session. Tap <strong>● Rec</strong> to record.");
+          showCaption("Camera preview enabled. Microphone audio will be requested only when recording begins.");
+
+          // A mobile permission screen can briefly end speech recognition.
+          // Resume it quietly without changing the reader's position.
+          if (shouldKeepListening() && !running && !recognitionStarting) {
+            scheduleRecognitionRestart(350);
+          }
+
           return true;
         } catch (error) {
           releaseCameraTracks();
           const message = error?.name === "NotAllowedError"
-            ? "Camera or microphone permission was denied. Allow both permissions and try again."
+            ? "Camera permission was denied. Allow camera access and try again."
             : `Unable to start camera: ${escapeHtml(error?.message || "unknown error")}`;
           showCaption(message, true);
           return false;
@@ -1504,9 +1507,18 @@ Speak naturally. The page will move with you.`;
         els.recordReview.classList.remove("hidden");
       };
 
+      const releaseRecordingAudio = () => {
+        if (recordingAudioStream) {
+          recordingAudioStream.getTracks().forEach((track) => track.stop());
+        }
+        recordingAudioStream = null;
+        recordingStream = null;
+      };
+
       const finishRecording = () => {
         window.clearInterval(recordingTimer);
         recordingTimer = null;
+        releaseRecordingAudio();
         els.recordBtn.classList.remove("recording");
         els.recordBtn.innerHTML = '● Rec <span id="recordingTime" class="recording-time">00:00</span>';
         els.recordingTime = document.getElementById("recordingTime");
@@ -1572,7 +1584,7 @@ Speak naturally. The page will move with you.`;
           return;
         }
 
-        if (!hasLiveTrack("video") || !hasLiveTrack("audio")) {
+        if (!hasLiveTrack("video")) {
           const cameraStarted = await startCamera();
           if (!cameraStarted) return;
         }
@@ -1585,15 +1597,30 @@ Speak naturally. The page will move with you.`;
           !recognitionManualStop &&
           els.mode.value === "voice";
 
-        // Android may stop browser-managed speech recognition the moment
-        // MediaRecorder begins using the microphone. Stop recognition first,
-        // let recording secure the camera/microphone stream, and then restart
-        // ordinary SpeechRecognition after a short delay.
+        // Temporarily end browser speech recognition before requesting the
+        // recording microphone. After MediaRecorder starts, recognition gets
+        // a fresh mobile session.
         if (shouldResumeVoice) {
           await stopRecognitionForSharedMicRebind();
         }
 
         try {
+          releaseRecordingAudio();
+
+          recordingAudioStream = await navigator.mediaDevices.getUserMedia({
+            video: false,
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          });
+
+          recordingStream = new MediaStream([
+            ...cameraStream.getVideoTracks(),
+            ...recordingAudioStream.getAudioTracks()
+          ]);
+
           recordedChunks = [];
           const mimeType = chooseRecordingMimeType();
           const options = {
@@ -1602,7 +1629,7 @@ Speak naturally. The page will move with you.`;
           };
           if (mimeType) options.mimeType = mimeType;
 
-          mediaRecorder = new MediaRecorder(cameraStream, options);
+          mediaRecorder = new MediaRecorder(recordingStream, options);
           mediaRecorder.ondataavailable = (event) => {
             if (event.data && event.data.size > 0) recordedChunks.push(event.data);
           };
@@ -1622,26 +1649,34 @@ Speak naturally. The page will move with you.`;
           mediaRecorder.start(1000);
 
           if (shouldResumeVoice) {
-            resumeRecognitionAfterRecordingStarts(700);
-            showCaption("Recording started. Restarting voice-follow after the recorder secures the microphone…");
+            resumeRecognitionAfterRecordingStarts(750);
+            showCaption("Recording started. Restarting voice-follow on mobile…");
           } else {
             recognitionRebinding = false;
             showCaption("Recording video and microphone audio.");
           }
         } catch (error) {
           recognitionRebinding = false;
+          releaseRecordingAudio();
 
           if (shouldResumeVoice) {
-            window.setTimeout(beginRecognition, 300);
+            window.setTimeout(beginRecognition, 350);
           }
 
-          showCaption(`Unable to record: ${escapeHtml(error?.message || "unknown error")}`, true);
+          const message = error?.name === "NotAllowedError"
+            ? "Microphone permission was denied for video recording."
+            : `Unable to record: ${escapeHtml(error?.message || "unknown error")}`;
+          showCaption(message, true);
         }
       };
 
       const stopRecording = () => {
         if (mediaRecorder?.state === "recording" || mediaRecorder?.state === "paused") {
+          // Ending a take should end voice-follow as well. This is an intentional
+          // pause, so the mobile auto-reconnect loop will remain stopped.
+          pauseAll();
           mediaRecorder.stop();
+          showCaption("Recording stopped. Voice listening is paused.");
         }
       };
 
@@ -1664,14 +1699,14 @@ Speak naturally. The page will move with you.`;
           return;
         }
 
-        // Only hide the preview. Keep the authorized stream alive so the
-        // browser does not ask for camera/microphone permission again.
+        // Only hide the video preview. The camera track stays active so the
+        // browser does not ask for camera permission again.
         cameraVisible = !cameraVisible;
         updateCameraUi();
         showCaption(
           cameraVisible
-            ? "Camera preview shown. The existing permission session is still active."
-            : "Camera preview hidden. Permission remains active for this page session."
+            ? "Camera preview shown. The existing camera session is still active."
+            : "Camera preview hidden. Camera permission remains active for this page session."
         );
       };
 
@@ -1684,13 +1719,10 @@ Speak naturally. The page will move with you.`;
         if (!navigator.mediaDevices?.getUserMedia) return;
 
         const nextFacingMode = currentFacingMode === "user" ? "environment" : "user";
-        const existingAudioTracks = cameraStream?.getAudioTracks().filter(
-          (track) => track.readyState === "live"
-        ) || [];
 
         try {
-          // Request video only. The already-authorized microphone track is reused,
-          // preventing another microphone permission request during camera flips.
+          // Switching cameras remains video-only so voice recognition keeps
+          // ownership of its microphone session.
           const videoOnlyStream = await navigator.mediaDevices.getUserMedia({
             video: {
               facingMode: { ideal: nextFacingMode },
@@ -1702,14 +1734,14 @@ Speak naturally. The page will move with you.`;
           });
 
           cameraStream?.getVideoTracks().forEach((track) => track.stop());
-          const combinedStream = new MediaStream([
-            ...videoOnlyStream.getVideoTracks(),
-            ...existingAudioTracks
-          ]);
 
           currentFacingMode = nextFacingMode;
-          await attachCameraStream(combinedStream);
-          showCaption("Camera switched. The existing microphone track was reused.");
+          await attachCameraStream(videoOnlyStream);
+          showCaption("Camera switched without changing the microphone session.");
+
+          if (shouldKeepListening() && !running && !recognitionStarting) {
+            scheduleRecognitionRestart(350);
+          }
         } catch (error) {
           showCaption(`Unable to switch cameras: ${escapeHtml(error?.message || "unknown error")}`, true);
         }
@@ -1789,7 +1821,6 @@ Speak naturally. The page will move with you.`;
       els.cameraBtn.addEventListener("click", toggleCamera);
       els.recordBtn.addEventListener("click", toggleRecording);
       els.flipCameraBtn.addEventListener("click", flipCamera);
-      els.stopCameraBtn.addEventListener("click", toggleCamera);
       els.closeReviewBtn.addEventListener("click", () => els.recordReview.classList.add("hidden"));
       els.deleteRecordingBtn.addEventListener("click", clearRecordingPreview);
       els.saveRecordingBtn.addEventListener("click", saveRecording);
@@ -1913,7 +1944,7 @@ Speak naturally. The page will move with you.`;
       if (!SpeechRecognition) {
         showCaption("Voice recognition is unavailable in this browser. Timed scroll still works; use current Chrome or Edge for voice follow.", true);
       } else {
-        showCaption("Voice-follow uses the stable mobile recognition path and restarts after video recording begins.");
+        showCaption("v1.18 keeps camera preview separate from the microphone. Stopping a recording also pauses listening.");
       }
 
       document.addEventListener("visibilitychange", () => {
@@ -1929,6 +1960,7 @@ Speak naturally. The page will move with you.`;
 
       window.addEventListener("beforeunload", () => {
         if (mediaRecorder?.state === "recording") mediaRecorder.stop();
+        releaseRecordingAudio();
         releaseCameraTracks();
         if (recordingUrl) URL.revokeObjectURL(recordingUrl);
       });
