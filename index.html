@@ -14,7 +14,7 @@
   <link rel="icon" href="favicon.ico" sizes="any" />
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
-  <title>VoicePrompt Teleprompter v10</title>
+  <title>VoicePrompt Teleprompter v11</title>
   <style>
     :root {
       --bg: #05090a;
@@ -831,10 +831,8 @@
       let recognitionRestartAttempts = 0;
       let lastRecognitionStartedAt = 0;
       let lastRecognitionResultAt = 0;
-      let recognitionAudioTrack = null;
-      let recognitionStartedWithSharedTrack = false;
       let recognitionRebinding = false;
-      let sharedTrackStartSupported = true;
+      let recognitionTranscriptTail = [];
 
       const storageGet = (key) => {
         try { return window.localStorage.getItem(key); }
@@ -998,7 +996,7 @@ Speak naturally. The page will move with you.`;
           }
         }
 
-        const threshold = steady ? 0.82 : 0.76;
+        const threshold = steady ? 0.76 : 0.70;
         return best.score >= threshold ? best : null;
       };
 
@@ -1025,11 +1023,6 @@ Speak naturally. The page will move with you.`;
         els.mode.value === "voice" &&
         document.visibilityState === "visible";
 
-      const getLiveSharedAudioTrack = () => {
-        const track = recognitionAudioTrack || cameraStream?.getAudioTracks?.()[0] || null;
-        return track?.kind === "audio" && track.readyState === "live" ? track : null;
-      };
-
       const beginRecognition = () => {
         if (!shouldKeepListening() || recognitionStarting || running) return;
 
@@ -1037,36 +1030,16 @@ Speak naturally. The page will move with you.`;
         if (!recognition) return;
 
         recognitionStarting = true;
-        recognitionStartedWithSharedTrack = false;
-
-        const sharedAudioTrack = getLiveSharedAudioTrack();
 
         try {
-          if (sharedAudioTrack && sharedTrackStartSupported) {
-            // Feed the same live microphone track to both SpeechRecognition and
-            // MediaRecorder. This prevents Android from treating them as two
-            // separate applications competing for the microphone.
-            recognition.start(sharedAudioTrack);
-            recognitionStartedWithSharedTrack = true;
-          } else {
-            recognition.start();
-          }
+          // Use the normal SpeechRecognition microphone path. The experimental
+          // start(audioTrack) overload reports "listening" on some Samsung/Chrome
+          // versions but never returns transcription results.
+          recognition.start();
         } catch (error) {
           recognitionStarting = false;
 
-          // Some browsers expose SpeechRecognition but do not yet support
-          // start(audioTrack). Fall back to the browser-managed microphone.
-          if (sharedAudioTrack && sharedTrackStartSupported) {
-            sharedTrackStartSupported = false;
-            try {
-              recognitionStarting = true;
-              recognition.start();
-              return;
-            } catch (_) {
-              recognitionStarting = false;
-            }
-          }
-
+          // Android may still be finishing the previous recognition segment.
           if (shouldKeepListening()) {
             scheduleRecognitionRestart(450);
           }
@@ -1111,10 +1084,10 @@ Speak naturally. The page will move with you.`;
           els.startBtn.disabled = true;
           els.pauseBtn.disabled = false;
           els.startBtn.textContent = "Listening";
-          setStatus(recognitionStartedWithSharedTrack ? "Listening · shared mic" : "Listening", true);
+          setStatus(mediaRecorder?.state === "recording" ? "Listening · recording" : "Listening", true);
           showCaption(
-            recognitionStartedWithSharedTrack
-              ? "Listening through the same microphone track used by video recording."
+            mediaRecorder?.state === "recording"
+              ? "Video is recording and voice-follow is listening."
               : "Listening… pauses and breaths will reconnect automatically."
           );
         };
@@ -1122,12 +1095,22 @@ Speak naturally. The page will move with you.`;
         instance.onresult = (event) => {
           lastRecognitionResultAt = Date.now();
           recognitionRestartAttempts = 0;
-          let latest = "";
-          for (let i = Math.max(0, event.resultIndex - 2); i < event.results.length; i++) {
-            latest += " " + event.results[i][0].transcript;
+
+          let sessionTranscript = "";
+          for (let i = 0; i < event.results.length; i++) {
+            sessionTranscript += " " + event.results[i][0].transcript;
           }
 
-          const heardWords = latest.trim().split(/\s+/).filter(Boolean);
+          const sessionWords = sessionTranscript.trim().split(/\s+/).filter(Boolean);
+          const newTail = sessionWords.slice(-16);
+
+          // Keep a little context when mobile Chrome closes and reopens a
+          // recognition segment after a breath.
+          const heardWords = [
+            ...recognitionTranscriptTail.slice(-5),
+            ...newTail
+          ].slice(-18);
+
           const match = findBestPosition(heardWords);
 
           if (match && match.nextIndex >= currentIndex - 2) {
@@ -1135,12 +1118,26 @@ Speak naturally. The page will move with you.`;
             const maxAdvance = steady ? 5 : 9;
             const proposedIndex = Math.max(currentIndex, match.nextIndex);
 
-            // Even a strong match cannot skip an entire sentence in one update.
             currentIndex = Math.min(proposedIndex, currentIndex + maxAdvance);
             updateHighlight();
           }
 
-          const preview = heardWords.slice(-10).join(" ");
+          // Preserve only finalized words so interim corrections do not create
+          // a large or duplicated transcript tail.
+          const finalizedWords = [];
+          for (let i = 0; i < event.results.length; i++) {
+            if (event.results[i].isFinal) {
+              finalizedWords.push(...event.results[i][0].transcript.trim().split(/\s+/).filter(Boolean));
+            }
+          }
+          if (finalizedWords.length) {
+            recognitionTranscriptTail = [
+              ...recognitionTranscriptTail,
+              ...finalizedWords
+            ].slice(-12);
+          }
+
+          const preview = newTail.slice(-10).join(" ");
           if (preview) showCaption(`Heard: <strong>${escapeHtml(preview)}</strong>`);
         };
 
@@ -1237,10 +1234,6 @@ Speak naturally. The page will move with you.`;
         recognitionWanted = true;
         recognitionManualStop = false;
         recognitionRestartAttempts = 0;
-        recognitionAudioTrack =
-          mediaRecorder?.state === "recording"
-            ? (cameraStream?.getAudioTracks?.()[0] || null)
-            : recognitionAudioTrack;
         els.startBtn.disabled = true;
         els.pauseBtn.disabled = false;
         els.startBtn.textContent = "Starting…";
@@ -1317,6 +1310,7 @@ Speak naturally. The page will move with you.`;
         setStatus("Ready");
         els.startBtn.textContent = els.mode.value === "voice" ? "Start listening" : "Start scrolling";
         recognitionSessionStarted = false;
+        recognitionTranscriptTail = [];
       };
 
 
@@ -1351,8 +1345,6 @@ Speak naturally. The page will move with you.`;
           cameraStream.getTracks().forEach((track) => track.stop());
         }
         cameraStream = null;
-        recognitionAudioTrack = null;
-        recognitionStartedWithSharedTrack = false;
         cameraVisible = false;
         els.cameraPreview.srcObject = null;
         updateCameraUi();
@@ -1495,11 +1487,7 @@ Speak naturally. The page will move with you.`;
         recognitionStarting = false;
       };
 
-      const resumeRecognitionOnSharedMic = (delay = 360) => {
-        const sharedAudioTrack = cameraStream?.getAudioTracks?.()[0] || null;
-        recognitionAudioTrack =
-          sharedAudioTrack?.readyState === "live" ? sharedAudioTrack : null;
-
+      const resumeRecognitionAfterRecordingStarts = (delay = 650) => {
         recognitionRebinding = false;
 
         if (!shouldKeepListening()) return;
@@ -1531,9 +1519,9 @@ Speak naturally. The page will move with you.`;
           els.mode.value === "voice";
 
         // Android may stop browser-managed speech recognition the moment
-        // MediaRecorder begins using the microphone. Stop that recognition
-        // session first, start recording, then reconnect recognition to the
-        // exact same live audio track used by the recorder.
+        // MediaRecorder begins using the microphone. Stop recognition first,
+        // let recording secure the camera/microphone stream, and then restart
+        // ordinary SpeechRecognition after a short delay.
         if (shouldResumeVoice) {
           await stopRecognitionForSharedMicRebind();
         }
@@ -1567,8 +1555,8 @@ Speak naturally. The page will move with you.`;
           mediaRecorder.start(1000);
 
           if (shouldResumeVoice) {
-            resumeRecognitionOnSharedMic(420);
-            showCaption("Recording started. Reconnecting voice-follow to the shared microphone…");
+            resumeRecognitionAfterRecordingStarts(700);
+            showCaption("Recording started. Restarting voice-follow after the recorder secures the microphone…");
           } else {
             recognitionRebinding = false;
             showCaption("Recording video and microphone audio.");
@@ -1577,8 +1565,7 @@ Speak naturally. The page will move with you.`;
           recognitionRebinding = false;
 
           if (shouldResumeVoice) {
-            recognitionAudioTrack = null;
-            window.setTimeout(beginRecognition, 250);
+            window.setTimeout(beginRecognition, 300);
           }
 
           showCaption(`Unable to record: ${escapeHtml(error?.message || "unknown error")}`, true);
@@ -1854,7 +1841,7 @@ Speak naturally. The page will move with you.`;
       if (!SpeechRecognition) {
         showCaption("Voice recognition is unavailable in this browser. Timed scroll still works; use current Chrome or Edge for voice follow.", true);
       } else {
-        showCaption("Voice-follow and video recording now share one microphone track on supported mobile browsers.");
+        showCaption("Voice-follow uses the stable mobile recognition path and restarts after video recording begins.");
       }
 
       document.addEventListener("visibilitychange", () => {
