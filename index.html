@@ -14,7 +14,7 @@
   <link rel="icon" href="favicon.ico" sizes="any" />
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
-  <title>VoicePrompt Teleprompter v11</title>
+  <title>VoicePrompt Teleprompter v13</title>
   <style>
     :root {
       --bg: #05090a;
@@ -28,7 +28,7 @@
       --line: rgba(255, 255, 255, 0.11);
       --font-size: 64px;
       --reading-width: 1050px;
-      --focus-y: 42%;
+      --focus-y: 31.5%;
     }
 
     * { box-sizing: border-box; }
@@ -99,7 +99,7 @@
     .app {
       height: 100%;
       display: grid;
-      grid-template-rows: auto 1fr;
+      grid-template-rows: auto 0 minmax(0, 1fr);
     }
 
     .toolbar {
@@ -115,11 +115,46 @@
       backdrop-filter: blur(14px);
     }
 
+    .toolbar-toggle-dock {
+      position: relative;
+      z-index: 30;
+      height: 0;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      pointer-events: none;
+    }
+
     .toolbar-toggle {
-      display: none;
-      margin-left: auto;
-      min-width: 74px;
-      font-weight: 750;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 96px;
+      min-height: 30px;
+      margin: 0;
+      padding: 5px 16px 6px;
+      border-top: 0;
+      border-radius: 0 0 13px 13px;
+      background: var(--panel);
+      box-shadow: 0 9px 24px rgba(0, 0, 0, 0.34);
+      font-size: 12px;
+      font-weight: 850;
+      letter-spacing: 0.01em;
+      pointer-events: auto;
+      transform: translateY(-1px);
+    }
+
+    .toolbar-toggle:hover {
+      background: #17272a;
+    }
+
+    /* Compact mode works on desktop, portrait mobile, and landscape mobile. */
+    .toolbar.compact {
+      flex-wrap: nowrap;
+    }
+
+    .toolbar.compact .toolbar-extra {
+      display: none !important;
     }
 
     .toolbar-extra {
@@ -146,6 +181,27 @@
     }
 
     .brand span { color: var(--accent); }
+
+    .version-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      min-width: 34px;
+      height: 20px;
+      margin-left: -2px;
+      margin-right: 4px;
+      padding: 0 7px;
+      border: 1px solid rgba(51, 210, 195, 0.32);
+      border-radius: 999px;
+      background: rgba(51, 210, 195, 0.08);
+      color: var(--accent);
+      font-size: 10px;
+      font-weight: 850;
+      line-height: 1;
+      letter-spacing: 0.03em;
+      white-space: nowrap;
+    }
 
     .control {
       display: inline-flex;
@@ -230,7 +286,7 @@
       overflow-y: auto;
       scroll-behavior: smooth;
       scrollbar-width: none;
-      padding: 42vh 7vw 58vh;
+      padding: 31.5vh 7vw 68.5vh;
       mask-image: linear-gradient(to bottom, transparent 0%, black 12%, black 82%, transparent 100%);
     }
 
@@ -484,16 +540,25 @@
       }
 
       .toolbar-toggle {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        order: 4;
+        min-width: 104px;
+        min-height: 31px;
+        padding: 6px 17px 7px;
+        font-size: 12px;
       }
 
       #editBtn { order: 1; }
       #startBtn { order: 2; }
       #pauseBtn { order: 3; }
       .brand { order: 0; }
+      .version-badge {
+        order: 0;
+        min-width: 30px;
+        height: 18px;
+        margin-left: -2px;
+        margin-right: 1px;
+        padding-inline: 6px;
+        font-size: 9px;
+      }
 
       .toolbar-extra {
         order: 5;
@@ -635,8 +700,6 @@
         min-width: 48px;
       }
 
-      #toolbarToggle { order: 5; }
-
       .toolbar-extra { order: 6; }
 
       .toolbar.compact #cameraBtn,
@@ -669,13 +732,13 @@
   <main class="app">
     <header id="toolbar" class="toolbar">
       <div class="brand">Voice<span>Prompt</span></div>
+      <span class="version-badge" aria-label="App version 13" title="VoicePrompt version 13">v13</span>
 
-      <button id="editBtn" title="Edit script">Edit</button>
+      <button id="editBtn" title="Open or edit script">Script</button>
       <button id="startBtn" class="primary">Start listening</button>
       <button id="pauseBtn" disabled>Pause</button>
       <button id="cameraBtn" type="button">Enable camera</button>
       <button id="recordBtn" class="record-button" type="button" disabled>● Rec <span id="recordingTime" class="recording-time">00:00</span></button>
-      <button id="toolbarToggle" class="toolbar-toggle" type="button" aria-controls="toolbar" aria-expanded="true">Less ↑</button>
 
       <button id="resetBtn" class="toolbar-extra" title="Reset to beginning">Reset</button>
 
@@ -716,6 +779,10 @@
         <span id="statusText">Ready</span>
       </div>
     </header>
+
+    <div class="toolbar-toggle-dock">
+      <button id="toolbarToggle" class="toolbar-toggle" type="button" aria-controls="toolbar" aria-expanded="true">Less ↑</button>
+    </div>
 
     <section class="stage">
       <div id="cameraLayer" class="camera-layer hidden">
@@ -920,7 +987,7 @@ Speak naturally. The page will move with you.`;
 
         if (spans[currentIndex] && (forceScroll || currentIndex % 2 === 0)) {
           const target = spans[currentIndex];
-          const desiredY = els.reader.clientHeight * 0.42;
+          const desiredY = els.reader.clientHeight * 0.315;
           const targetY = target.offsetTop - desiredY + target.offsetHeight / 2;
           els.reader.scrollTo({ top: Math.max(0, targetY), behavior: forceScroll ? "auto" : "smooth" });
         }
@@ -1740,7 +1807,7 @@ Speak naturally. The page will move with you.`;
         storageSet("voicePromptScript", text);
         parseScript(text);
         els.editor.classList.add("hidden");
-        if (window.matchMedia("(max-width: 760px)").matches) setToolbarCompact(true);
+        if (window.matchMedia("(max-width: 760px), (pointer: coarse)").matches || navigator.maxTouchPoints > 0) setToolbarCompact(true);
         showCaption("Script loaded. Choose <strong>Start listening</strong>.");
       });
 
@@ -1831,12 +1898,17 @@ Speak naturally. The page will move with you.`;
       els.scriptInput.value = saved || sample;
       parseScript(saved || sample);
 
-      const mobileToolbarPreference = storageGet("voicePromptToolbarCompact");
-      if (window.matchMedia("(max-width: 760px)").matches) {
-        setToolbarCompact(mobileToolbarPreference === null ? true : mobileToolbarPreference === "1", false);
-      } else {
-        setToolbarCompact(false, false);
-      }
+      const toolbarPreference = storageGet("voicePromptToolbarCompact");
+      const likelyMobileDevice =
+        window.matchMedia("(max-width: 760px), (pointer: coarse)").matches ||
+        navigator.maxTouchPoints > 0;
+
+      setToolbarCompact(
+        toolbarPreference === null
+          ? likelyMobileDevice
+          : toolbarPreference === "1",
+        false
+      );
 
       if (!SpeechRecognition) {
         showCaption("Voice recognition is unavailable in this browser. Timed scroll still works; use current Chrome or Edge for voice follow.", true);
