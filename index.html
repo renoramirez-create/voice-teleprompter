@@ -14,7 +14,7 @@
   <link rel="icon" href="favicon.ico" sizes="any" />
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
-  <title>VoicePrompt Teleprompter v1.28</title>
+  <title>VoicePrompt Teleprompter v1.29</title>
   <style>
     :root {
       --bg: #05090a;
@@ -876,7 +876,6 @@
 
       #editBtn { order: 1; }
       #startBtn { order: 2; }
-      #pauseBtn { order: 3; }
       .brand { order: 0; }
       .version-badge {
         order: 0;
@@ -926,10 +925,6 @@
         color: var(--accent);
         font-size: 15px;
         font-weight: 900;
-      }
-
-      .toolbar.compact #pauseBtn:disabled {
-        display: none;
       }
 
       .toolbar.compact .toolbar-extra {
@@ -1516,19 +1511,134 @@
       mix-blend-mode: normal !important;
     }
 
+  
+    .camera-control {
+      position: fixed;
+      z-index: 5000;
+      right: max(12px, env(safe-area-inset-right));
+      bottom: max(66px, calc(env(safe-area-inset-bottom) + 54px));
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      max-width: calc(100vw - 20px);
+      padding: 6px;
+      border: 1px solid #2b5558;
+      border-radius: 13px;
+      background: #071112;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.72);
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    .camera-control.hidden {
+      display: none !important;
+    }
+
+    .camera-control button {
+      min-height: 35px;
+      padding: 7px 10px;
+      border-radius: 9px;
+      white-space: nowrap;
+    }
+
+    .camera-drag-handle {
+      width: 28px;
+      min-width: 28px;
+      padding: 0 !important;
+      cursor: grab;
+      touch-action: none;
+      color: #8aa4a7;
+      background: #10191b !important;
+      border-color: #253f43 !important;
+      font-size: 17px;
+      letter-spacing: -5px;
+      overflow: hidden;
+    }
+
+    .camera-drag-handle:active {
+      cursor: grabbing;
+    }
+
+    .camera-control.dragging {
+      box-shadow:
+        0 12px 32px rgba(0, 0, 0, 0.82),
+        0 0 0 2px rgba(51, 210, 195, 0.18);
+    }
+
+    .camera-control-action {
+      position: static !important;
+      right: auto !important;
+      bottom: auto !important;
+      min-width: 0;
+      box-shadow: none !important;
+    }
+
+    .camera-control .record-button {
+      min-width: 83px;
+    }
+
+    .camera-control .flip-control {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      font-weight: 900;
+    }
+
+    .camera-control .flip-control svg {
+      width: 15px;
+      height: 15px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    body.video-only .camera-control {
+      display: flex !important;
+    }
+
+    body.video-only .camera-control.hidden {
+      display: none !important;
+    }
+
+    @media (max-width: 760px), (pointer: coarse) {
+      .camera-control {
+        right: max(8px, env(safe-area-inset-right));
+        bottom: max(54px, calc(env(safe-area-inset-bottom) + 44px));
+        gap: 4px;
+        padding: 5px;
+      }
+
+      .camera-control button {
+        min-height: 33px;
+        padding: 6px 7px;
+        font-size: 10px;
+      }
+
+      .camera-control .record-button {
+        min-width: 76px;
+      }
+
+      .camera-drag-handle {
+        width: 25px;
+        min-width: 25px;
+        padding: 0 !important;
+      }
+    }
+
   </style>
 </head>
 <body>
   <main class="app">
     <header id="toolbar" class="toolbar">
       <div class="brand">Voice<span>Prompt</span></div>
-      <span class="version-badge" aria-label="App version 1.28" title="VoicePrompt version 1.28">v1.28</span>
+      <span class="version-badge" aria-label="App version 1.29" title="VoicePrompt version 1.29">v1.29</span>
 
       <button id="editBtn" title="Open or edit script">Script</button>
       <button id="startBtn" class="primary">Start listening</button>
-      <button id="pauseBtn" disabled>Pause</button>
       <button id="cameraBtn" type="button">Enable camera</button>
-      <button id="recordBtn" class="record-button" type="button" disabled>● Rec <span id="recordingTime" class="recording-time">00:00</span></button>
 
       <button id="resetBtn" class="toolbar-extra" title="Reset to beginning">Reset</button>
 
@@ -1579,7 +1689,6 @@
         </select>
       </div>
 
-      <button id="flipCameraBtn" class="toolbar-extra" type="button" disabled>Use rear camera</button>
       <button id="mirrorBtn" class="toolbar-extra">Mirror Text</button>
       <button id="fullscreenBtn" class="toolbar-extra">Full screen</button>
 
@@ -1594,13 +1703,52 @@
       <button id="toolbarToggle" class="toolbar-toggle" type="button" aria-controls="toolbar" aria-expanded="true">Less ↑</button>
     </div>
 
-    <button
-      id="videoOnlyBtn"
-      class="video-only-toggle"
-      type="button"
-      aria-pressed="false"
-      title="Hide the teleprompter interface and show only the camera preview"
-    >Video only</button>
+    <div
+      id="cameraControl"
+      class="camera-control hidden"
+      role="group"
+      aria-label="Camera and recording controls"
+    >
+      <button
+        id="cameraDragHandle"
+        class="camera-drag-handle"
+        type="button"
+        aria-label="Drag camera controls"
+        title="Drag camera controls"
+      >
+        <span aria-hidden="true">⋮⋮</span>
+      </button>
+
+      <button
+        id="recordBtn"
+        class="record-button camera-control-action"
+        type="button"
+        disabled
+      >● Rec <span id="recordingTime" class="recording-time">00:00</span></button>
+
+      <button
+        id="videoOnlyBtn"
+        class="camera-control-action"
+        type="button"
+        aria-pressed="false"
+        title="Hide the teleprompter interface and show only the camera preview"
+      >Video only</button>
+
+      <button
+        id="flipCameraBtn"
+        class="camera-control-action flip-control"
+        type="button"
+        disabled
+        aria-label="Switch camera"
+        title="Switch camera"
+      >
+        <svg aria-hidden="true" viewBox="0 0 24 24">
+          <path d="M7.5 7 9 5h6l1.5 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2.5Z"></path>
+          <circle cx="12" cy="13" r="3.25"></circle>
+        </svg>
+        <span>FLIP</span>
+      </button>
+    </div>
 
     <section class="stage">
       <div id="cameraLayer" class="camera-layer hidden">
@@ -1665,6 +1813,8 @@
         pasteBtn: document.getElementById("pasteBtn"),
         toolbar: document.getElementById("toolbar"),
         toolbarToggle: document.getElementById("toolbarToggle"),
+        cameraControl: document.getElementById("cameraControl"),
+        cameraDragHandle: document.getElementById("cameraDragHandle"),
         videoOnlyBtn: document.getElementById("videoOnlyBtn"),
         editBtn: document.getElementById("editBtn"),
         closeEditorBtn: document.getElementById("closeEditorBtn"),
@@ -1672,7 +1822,6 @@
         saveBtn: document.getElementById("saveBtn"),
         sampleBtn: document.getElementById("sampleBtn"),
         startBtn: document.getElementById("startBtn"),
-        pauseBtn: document.getElementById("pauseBtn"),
         cameraBtn: document.getElementById("cameraBtn"),
         recordBtn: document.getElementById("recordBtn"),
         recordingTime: document.getElementById("recordingTime"),
@@ -1764,6 +1913,8 @@
 
       let manualSeekActive = false;
       let manualSeekTimer = null;
+
+      let cameraControlDrag = null;
 
       const cameraAspectProfiles = {
         "16:9": { ratio: 16 / 9, width: 1920, height: 1080 },
@@ -2500,9 +2651,7 @@ Speak naturally. The page will move with you.`;
           recognitionSessionStarted = true;
           recognitionManualStop = false;
           lastRecognitionStartedAt = Date.now();
-          els.startBtn.disabled = true;
-          els.pauseBtn.disabled = false;
-          els.startBtn.textContent = "Listening";
+          updateStartButton(true);
           setStatus(mediaRecorder?.state === "recording" ? "Listening · recording" : "Listening", true);
           showCaption(
             mediaRecorder?.state === "recording"
@@ -2581,9 +2730,7 @@ Speak naturally. The page will move with you.`;
             recognitionWanted = false;
             recognitionManualStop = true;
             running = false;
-            els.startBtn.disabled = false;
-            els.pauseBtn.disabled = true;
-            els.startBtn.textContent = "Start listening";
+            updateStartButton(false);
             setStatus("Mic blocked");
             showCaption("Microphone access was blocked. Allow microphone access for this site and try again.", true);
             return;
@@ -2618,14 +2765,7 @@ Speak naturally. The page will move with you.`;
 
           if (!shouldKeepListening()) {
             clearRecognitionRestart();
-            els.startBtn.disabled = false;
-            els.pauseBtn.disabled = true;
-            els.startBtn.textContent =
-          els.mode.value === "voice"
-            ? "Start listening"
-            : els.mode.value === "pace"
-              ? "Start speaking pace"
-              : "Start scrolling";
+            updateStartButton(false);
             setStatus(recognitionManualStop ? "Paused" : "Ready");
             return;
           }
@@ -2652,6 +2792,46 @@ Speak naturally. The page will move with you.`;
         return div.innerHTML;
       };
 
+      const getStartButtonLabel = (active = false) => {
+        if (els.mode.value === "voice") {
+          return active
+            ? "Pause listening"
+            : "Start listening";
+        }
+
+        if (els.mode.value === "pace") {
+          return active
+            ? "Pause pacing"
+            : "Start speaking pace";
+        }
+
+        return active
+          ? "Pause scrolling"
+          : "Start scrolling";
+      };
+
+      const selectedMethodIsRunning = () => {
+        if (els.mode.value === "voice") {
+          return (
+            recognitionWanted ||
+            recognitionStarting ||
+            running
+          );
+        }
+
+        return running;
+      };
+
+      const updateStartButton = (active = selectedMethodIsRunning()) => {
+        els.startBtn.disabled = false;
+        els.startBtn.textContent =
+          getStartButtonLabel(active);
+        els.startBtn.setAttribute(
+          "aria-pressed",
+          String(active)
+        );
+      };
+
       const startVoice = async () => {
         if (!SpeechRecognition) {
           showCaption("This browser does not provide speech recognition. Use Speaking pace or Timed scroll mode.", true);
@@ -2669,9 +2849,7 @@ Speak naturally. The page will move with you.`;
         recognitionWanted = true;
         recognitionManualStop = false;
         recognitionRestartAttempts = 0;
-        els.startBtn.disabled = true;
-        els.pauseBtn.disabled = false;
-        els.startBtn.textContent = "Starting…";
+        updateStartButton(true);
         setStatus("Starting…", true);
 
         if (hasLiveTrack("video")) {
@@ -2698,9 +2876,7 @@ Speak naturally. The page will move with you.`;
           }
         }
         running = false;
-        els.startBtn.disabled = false;
-        els.pauseBtn.disabled = true;
-        els.startBtn.textContent = els.mode.value === "voice" ? "Start listening" : "Start scrolling";
+        updateStartButton(false);
         setStatus("Paused");
       };
 
@@ -2849,9 +3025,7 @@ Speak naturally. The page will move with you.`;
           paceWasSpeaking = false;
           paceNoiseFloor = 0.012;
 
-          els.startBtn.disabled = true;
-          els.pauseBtn.disabled = false;
-          els.startBtn.textContent = "Speaking pace";
+          updateStartButton(true);
           setStatus("Speaking pace · waiting");
           showCaption(
             `Speaking pace is ready at <strong>${els.speed.value} WPM</strong>. The text moves while you speak and pauses when you stop.`
@@ -2861,8 +3035,7 @@ Speak naturally. The page will move with you.`;
         } catch (error) {
           stopPace(true);
           running = false;
-          els.startBtn.disabled = false;
-          els.pauseBtn.disabled = true;
+          updateStartButton(false);
           setStatus("Microphone unavailable");
           showCaption(
             `Unable to start Speaking pace: <strong>${escapeHtml(error?.message || "microphone unavailable")}</strong>`,
@@ -2874,8 +3047,7 @@ Speak naturally. The page will move with you.`;
       const startAuto = () => {
         if (!wordData.length) return;
         running = true;
-        els.startBtn.disabled = true;
-        els.pauseBtn.disabled = false;
+        updateStartButton(true);
         setStatus("Auto scrolling", true);
         lastFrameTime = performance.now();
         autoFrame = requestAnimationFrame(autoTick);
@@ -2917,14 +3089,7 @@ Speak naturally. The page will move with you.`;
         if (autoFrame) cancelAnimationFrame(autoFrame);
         autoFrame = null;
 
-        els.startBtn.disabled = false;
-        els.pauseBtn.disabled = true;
-        els.startBtn.textContent =
-          els.mode.value === "voice"
-            ? "Start listening"
-            : els.mode.value === "pace"
-              ? "Start speaking pace"
-              : "Start scrolling";
+        updateStartButton(false);
         setStatus("Paused");
       };
 
@@ -2945,7 +3110,7 @@ Speak naturally. The page will move with you.`;
         updateHighlight(true);
         showCaption("Reset to the beginning.");
         setStatus("Ready");
-        els.startBtn.textContent = els.mode.value === "voice" ? "Start listening" : "Start scrolling";
+        updateStartButton(false);
         recognitionSessionStarted = false;
         recognitionTranscriptTail = [];
       };
@@ -3068,6 +3233,153 @@ Speak naturally. The page will move with you.`;
         throw lastError || new Error("Requested camera was unavailable.");
       };
 
+      const updateCameraControlVisibility = () => {
+        const cameraReady = hasLiveTrack("video");
+        const reviewOpen =
+          !els.recordReview.classList.contains("hidden");
+
+        els.cameraControl.classList.toggle(
+          "hidden",
+          !cameraReady || reviewOpen
+        );
+      };
+
+      const clampCameraControlPosition = (left, top) => {
+        const margin = 8;
+        const rect =
+          els.cameraControl.getBoundingClientRect();
+        const maxLeft = Math.max(
+          margin,
+          window.innerWidth - rect.width - margin
+        );
+        const maxTop = Math.max(
+          margin,
+          window.innerHeight - rect.height - margin
+        );
+
+        return {
+          left: Math.min(
+            Math.max(margin, left),
+            maxLeft
+          ),
+          top: Math.min(
+            Math.max(margin, top),
+            maxTop
+          )
+        };
+      };
+
+      const setCameraControlPosition = (
+        left,
+        top,
+        persist = true
+      ) => {
+        const position =
+          clampCameraControlPosition(left, top);
+
+        els.cameraControl.style.left =
+          `${Math.round(position.left)}px`;
+        els.cameraControl.style.top =
+          `${Math.round(position.top)}px`;
+        els.cameraControl.style.right = "auto";
+        els.cameraControl.style.bottom = "auto";
+
+        if (persist) {
+          storageSet(
+            "voicePromptCameraControlPosition",
+            JSON.stringify(position)
+          );
+        }
+      };
+
+      const restoreCameraControlPosition = () => {
+        const saved = storageGet(
+          "voicePromptCameraControlPosition"
+        );
+
+        if (!saved) return;
+
+        try {
+          const position = JSON.parse(saved);
+
+          if (
+            Number.isFinite(position.left) &&
+            Number.isFinite(position.top)
+          ) {
+            setCameraControlPosition(
+              position.left,
+              position.top,
+              false
+            );
+          }
+        } catch (_) {
+          storageRemove(
+            "voicePromptCameraControlPosition"
+          );
+        }
+      };
+
+      const beginCameraControlDrag = (event) => {
+        if (event.button !== undefined && event.button !== 0) {
+          return;
+        }
+
+        const rect =
+          els.cameraControl.getBoundingClientRect();
+
+        cameraControlDrag = {
+          pointerId: event.pointerId,
+          offsetX: event.clientX - rect.left,
+          offsetY: event.clientY - rect.top
+        };
+
+        els.cameraControl.classList.add("dragging");
+        els.cameraDragHandle.setPointerCapture?.(
+          event.pointerId
+        );
+        event.preventDefault();
+      };
+
+      const moveCameraControl = (event) => {
+        if (
+          !cameraControlDrag ||
+          event.pointerId !==
+            cameraControlDrag.pointerId
+        ) {
+          return;
+        }
+
+        setCameraControlPosition(
+          event.clientX -
+            cameraControlDrag.offsetX,
+          event.clientY -
+            cameraControlDrag.offsetY,
+          false
+        );
+      };
+
+      const endCameraControlDrag = (event) => {
+        if (
+          !cameraControlDrag ||
+          event.pointerId !==
+            cameraControlDrag.pointerId
+        ) {
+          return;
+        }
+
+        const rect =
+          els.cameraControl.getBoundingClientRect();
+
+        setCameraControlPosition(
+          rect.left,
+          rect.top,
+          true
+        );
+
+        els.cameraControl.classList.remove("dragging");
+        cameraControlDrag = null;
+      };
+
       const updateCameraUi = () => {
         const cameraReady = hasLiveTrack("video");
         els.cameraLayer.classList.toggle(
@@ -3083,10 +3395,20 @@ Speak naturally. The page will move with you.`;
 
         els.recordBtn.disabled = !cameraReady;
         els.flipCameraBtn.disabled = !cameraReady;
-        els.flipCameraBtn.textContent =
+
+        const targetCamera =
           currentFacingMode === "user"
-            ? "Use rear camera"
-            : "Use front camera";
+            ? "rear"
+            : "front";
+
+        els.flipCameraBtn.setAttribute(
+          "aria-label",
+          `Switch to ${targetCamera} camera`
+        );
+        els.flipCameraBtn.title =
+          `Switch to ${targetCamera} camera`;
+
+        updateCameraControlVisibility();
       };
 
       const releaseCameraTracks = () => {
@@ -3203,6 +3525,11 @@ Speak naturally. The page will move with you.`;
         els.recordingTime.textContent = formatDuration(Date.now() - recordingStartedAt);
       };
 
+      const closeRecordingReview = () => {
+        els.recordReview.classList.add("hidden");
+        updateCameraControlVisibility();
+      };
+
       const clearRecordingPreview = () => {
         if (recordingCountdownActive) cancelRecordingCountdown();
         if (recordingUrl) URL.revokeObjectURL(recordingUrl);
@@ -3211,15 +3538,29 @@ Speak naturally. The page will move with you.`;
         recordingFileName = "";
         els.reviewVideo.removeAttribute("src");
         els.reviewVideo.load();
-        els.recordReview.classList.add("hidden");
+        closeRecordingReview();
       };
 
       const showRecordingPreview = () => {
         if (!recordedBlob) return;
-        if (recordingUrl) URL.revokeObjectURL(recordingUrl);
-        recordingUrl = URL.createObjectURL(recordedBlob);
+
+        if (
+          document.body.classList.contains(
+            "video-only"
+          )
+        ) {
+          setVideoOnlyMode(false);
+        }
+
+        if (recordingUrl) {
+          URL.revokeObjectURL(recordingUrl);
+        }
+
+        recordingUrl =
+          URL.createObjectURL(recordedBlob);
         els.reviewVideo.src = recordingUrl;
         els.recordReview.classList.remove("hidden");
+        updateCameraControlVisibility();
       };
 
       const releaseRecordingAudio = () => {
@@ -3651,11 +3992,6 @@ Speak naturally. The page will move with you.`;
 
         cameraTransitionActive = true;
         els.flipCameraBtn.disabled = true;
-        els.flipCameraBtn.textContent =
-          nextFacingMode === "environment"
-            ? "Opening rear…"
-            : "Opening front…";
-
         if (resumeVoice) {
           await rebuildRecognitionEngine({ resume: false });
         }
@@ -3829,11 +4165,54 @@ Speak naturally. The page will move with you.`;
         applyCameraAspect({ announce: true });
       });
 
-      window.addEventListener("resize", resizeCameraFrame);
+      window.addEventListener("resize", () => {
+        resizeCameraFrame();
 
-      els.flipCameraBtn.addEventListener("click", flipCamera);
-      els.closeReviewBtn.addEventListener("click", () => els.recordReview.classList.add("hidden"));
-      els.deleteRecordingBtn.addEventListener("click", clearRecordingPreview);
+        if (
+          !els.cameraControl.classList.contains(
+            "hidden"
+          )
+        ) {
+          const rect =
+            els.cameraControl.getBoundingClientRect();
+
+          setCameraControlPosition(
+            rect.left,
+            rect.top,
+            false
+          );
+        }
+      });
+
+      els.cameraDragHandle.addEventListener(
+        "pointerdown",
+        beginCameraControlDrag
+      );
+      els.cameraDragHandle.addEventListener(
+        "pointermove",
+        moveCameraControl
+      );
+      els.cameraDragHandle.addEventListener(
+        "pointerup",
+        endCameraControlDrag
+      );
+      els.cameraDragHandle.addEventListener(
+        "pointercancel",
+        endCameraControlDrag
+      );
+
+      els.flipCameraBtn.addEventListener(
+        "click",
+        flipCamera
+      );
+      els.closeReviewBtn.addEventListener(
+        "click",
+        closeRecordingReview
+      );
+      els.deleteRecordingBtn.addEventListener(
+        "click",
+        clearRecordingPreview
+      );
 
       els.saveRecordingBtn.addEventListener("click", saveRecording);
 
@@ -3889,9 +4268,19 @@ Speak naturally. The page will move with you.`;
         }
       };
 
-      els.startBtn.addEventListener("click", startSelectedMethod);
+      const toggleSelectedMethod = () => {
+        if (selectedMethodIsRunning()) {
+          pauseAll();
+        } else {
+          startSelectedMethod();
+        }
+      };
 
-      els.pauseBtn.addEventListener("click", pauseAll);
+      els.startBtn.addEventListener(
+        "click",
+        toggleSelectedMethod
+      );
+
       els.resetBtn.addEventListener("click", reset);
 
       els.reader.addEventListener(
@@ -3967,12 +4356,7 @@ Speak naturally. The page will move with you.`;
 
         els.speedControl.hidden = els.mode.value === "voice";
         els.tracking.hidden = els.mode.value !== "voice";
-        els.startBtn.textContent =
-          els.mode.value === "voice"
-            ? "Start listening"
-            : els.mode.value === "pace"
-              ? "Start speaking pace"
-              : "Start scrolling";
+        updateStartButton(false);
 
         recognitionSessionStarted = false;
 
@@ -4005,12 +4389,29 @@ Speak naturally. The page will move with you.`;
             : "Mirror Text";
       });
 
+      const updateFullscreenButton = () => {
+        els.fullscreenBtn.textContent =
+          document.fullscreenElement
+            ? "Exit Full screen"
+            : "Full screen";
+      };
+
       els.fullscreenBtn.addEventListener("click", async () => {
         try {
-          if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
-          else await document.exitFullscreen();
-        } catch (_) {}
+          if (!document.fullscreenElement) {
+            await document.documentElement.requestFullscreen();
+          } else {
+            await document.exitFullscreen();
+          }
+        } catch (_) {
+          updateFullscreenButton();
+        }
       });
+
+      document.addEventListener(
+        "fullscreenchange",
+        updateFullscreenButton
+      );
 
       document.addEventListener("keydown", (event) => {
         if (
@@ -4030,7 +4431,7 @@ Speak naturally. The page will move with you.`;
 
         if (event.code === "Space") {
           event.preventDefault();
-          running ? pauseAll() : startSelectedMethod();
+          toggleSelectedMethod();
         }
 
         if (event.code === "ArrowLeft") {
@@ -4061,6 +4462,9 @@ Speak naturally. The page will move with you.`;
         els.cameraAspect.value = savedCameraAspect;
       }
       applyCameraAspect();
+      restoreCameraControlPosition();
+      updateFullscreenButton();
+      updateStartButton(false);
 
       const toolbarPreference = storageGet("voicePromptToolbarCompact");
       const likelyMobileDevice =
@@ -4077,7 +4481,7 @@ Speak naturally. The page will move with you.`;
       if (!SpeechRecognition) {
         showCaption("Voice recognition is unavailable in this browser. Timed scroll still works; use current Chrome or Edge for voice follow.", true);
       } else {
-        showCaption("v1.28 restores full-brightness Video only preview and strengthens front/rear camera switching.");
+        showCaption("v1.29 adds single-button Start/Pause controls and a draggable floating camera controller.");
       }
 
       document.addEventListener("visibilitychange", () => {
