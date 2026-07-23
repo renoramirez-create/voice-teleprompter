@@ -1,4 +1,4 @@
-const CACHE_NAME = "voiceprompt-v1.27-mobile-layout-preview";
+const CACHE_NAME = "voiceprompt-v1.28-camera-preview-fix";
 const APP_FILES = [
   "./",
   "./index.html",

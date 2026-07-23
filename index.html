@@ -14,7 +14,7 @@
   <link rel="icon" href="favicon.ico" sizes="any" />
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
-  <title>VoicePrompt Teleprompter v1.27</title>
+  <title>VoicePrompt Teleprompter v1.28</title>
   <style>
     :root {
       --bg: #05090a;
@@ -1503,13 +1503,26 @@
       }
     }
 
+  
+    body.video-only .camera-shade {
+      display: none !important;
+      background: transparent !important;
+      opacity: 0 !important;
+    }
+
+    body.video-only .camera-preview {
+      opacity: 1 !important;
+      filter: none !important;
+      mix-blend-mode: normal !important;
+    }
+
   </style>
 </head>
 <body>
   <main class="app">
     <header id="toolbar" class="toolbar">
       <div class="brand">Voice<span>Prompt</span></div>
-      <span class="version-badge" aria-label="App version 1.27" title="VoicePrompt version 1.27">v1.27</span>
+      <span class="version-badge" aria-label="App version 1.28" title="VoicePrompt version 1.28">v1.28</span>
 
       <button id="editBtn" title="Open or edit script">Script</button>
       <button id="startBtn" class="primary">Start listening</button>
@@ -1566,8 +1579,8 @@
         </select>
       </div>
 
-      <button id="flipCameraBtn" class="toolbar-extra" type="button" disabled>Flip camera</button>
-      <button id="mirrorBtn" class="toolbar-extra">Mirror</button>
+      <button id="flipCameraBtn" class="toolbar-extra" type="button" disabled>Use rear camera</button>
+      <button id="mirrorBtn" class="toolbar-extra">Mirror Text</button>
       <button id="fullscreenBtn" class="toolbar-extra">Full screen</button>
 
       <div class="spacer toolbar-extra"></div>
@@ -2950,16 +2963,130 @@ Speak naturally. The page will move with you.`;
           (track) => track.kind === kind && track.readyState === "live"
         ));
 
+      const cameraBaseConstraints = {
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 30, max: 30 }
+      };
+
+      const getActiveVideoDeviceId = () =>
+        cameraStream
+          ?.getVideoTracks?.()[0]
+          ?.getSettings?.()
+          ?.deviceId || "";
+
+      const chooseCameraDevice = async (
+        facingMode,
+        excludedDeviceId = ""
+      ) => {
+        if (!navigator.mediaDevices?.enumerateDevices) {
+          return "";
+        }
+
+        try {
+          const devices = (
+            await navigator.mediaDevices.enumerateDevices()
+          ).filter((device) => device.kind === "videoinput");
+
+          if (!devices.length) return "";
+
+          const rearPattern =
+            /back|rear|environment|world|traseira|trasera|arrière|rück/i;
+          const frontPattern =
+            /front|user|face|facetime|selfie|frontal|avant/i;
+          const pattern =
+            facingMode === "environment"
+              ? rearPattern
+              : frontPattern;
+
+          const labeledMatch = devices.find(
+            (device) =>
+              device.deviceId !== excludedDeviceId &&
+              pattern.test(device.label || "")
+          );
+
+          if (labeledMatch) return labeledMatch.deviceId;
+
+          const alternatives = devices.filter(
+            (device) => device.deviceId !== excludedDeviceId
+          );
+
+          if (!alternatives.length) return "";
+
+          return facingMode === "environment"
+            ? alternatives[alternatives.length - 1].deviceId
+            : alternatives[0].deviceId;
+        } catch (_) {
+          return "";
+        }
+      };
+
+      const requestCameraForFacing = async (
+        facingMode,
+        excludedDeviceId = ""
+      ) => {
+        const attempts = [];
+
+        // Strong request first. This tells mobile Chrome/Safari that the rear
+        // or front lens is required rather than merely preferred.
+        attempts.push({
+          ...cameraBaseConstraints,
+          facingMode: { exact: facingMode }
+        });
+
+        const selectedDeviceId = await chooseCameraDevice(
+          facingMode,
+          excludedDeviceId
+        );
+
+        if (selectedDeviceId) {
+          attempts.push({
+            ...cameraBaseConstraints,
+            deviceId: { exact: selectedDeviceId }
+          });
+        }
+
+        // Final compatibility fallback for browsers that do not honor exact.
+        attempts.push({
+          ...cameraBaseConstraints,
+          facingMode: { ideal: facingMode }
+        });
+
+        let lastError = null;
+
+        for (const videoConstraints of attempts) {
+          try {
+            return await navigator.mediaDevices.getUserMedia({
+              video: videoConstraints,
+              audio: false
+            });
+          } catch (error) {
+            lastError = error;
+          }
+        }
+
+        throw lastError || new Error("Requested camera was unavailable.");
+      };
+
       const updateCameraUi = () => {
         const cameraReady = hasLiveTrack("video");
-        els.cameraLayer.classList.toggle("hidden", !cameraReady || !cameraVisible);
+        els.cameraLayer.classList.toggle(
+          "hidden",
+          !cameraReady || !cameraVisible
+        );
+
         els.cameraBtn.textContent = !cameraReady
           ? "Enable camera"
           : cameraVisible
             ? "Hide cam"
             : "Show cam";
+
         els.recordBtn.disabled = !cameraReady;
         els.flipCameraBtn.disabled = !cameraReady;
+        els.flipCameraBtn.textContent =
+          currentFacingMode === "user"
+            ? "Use rear camera"
+            : "Use front camera";
       };
 
       const releaseCameraTracks = () => {
@@ -3501,7 +3628,10 @@ Speak naturally. The page will move with you.`;
 
       const flipCamera = async () => {
         if (mediaRecorder?.state === "recording") {
-          showCaption("Stop the recording before switching cameras.", true);
+          showCaption(
+            "Stop the recording before switching cameras.",
+            true
+          );
           return;
         }
 
@@ -3512,29 +3642,62 @@ Speak naturally. The page will move with you.`;
           recognitionWanted &&
           !recognitionManualStop;
 
-        const nextFacingMode = currentFacingMode === "user" ? "environment" : "user";
+        const previousFacingMode = currentFacingMode;
+        const previousDeviceId = getActiveVideoDeviceId();
+        const nextFacingMode =
+          currentFacingMode === "user"
+            ? "environment"
+            : "user";
+
         cameraTransitionActive = true;
+        els.flipCameraBtn.disabled = true;
+        els.flipCameraBtn.textContent =
+          nextFacingMode === "environment"
+            ? "Opening rear…"
+            : "Opening front…";
 
         if (resumeVoice) {
           await rebuildRecognitionEngine({ resume: false });
         }
 
-        try {
-          const videoOnlyStream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              facingMode: { ideal: nextFacingMode },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
-              frameRate: { ideal: 30, max: 30 }
-            },
-            audio: false
-          });
+        // Mobile devices often cannot open the second lens while the first
+        // lens is still held by the page, so release it before requesting the
+        // exact opposite-facing camera.
+        cameraStream
+          ?.getVideoTracks()
+          .forEach((track) => track.stop());
 
-          cameraStream?.getVideoTracks().forEach((track) => track.stop());
+        cameraStream = null;
+        els.cameraPreview.srcObject = null;
+
+        try {
+          const videoOnlyStream = await requestCameraForFacing(
+            nextFacingMode,
+            previousDeviceId
+          );
 
           currentFacingMode = nextFacingMode;
+
+          const actualFacing =
+            videoOnlyStream
+              .getVideoTracks?.()[0]
+              ?.getSettings?.()
+              ?.facingMode;
+
+          if (
+            actualFacing === "user" ||
+            actualFacing === "environment"
+          ) {
+            currentFacingMode = actualFacing;
+          }
+
           await attachCameraStream(videoOnlyStream);
           cameraTransitionActive = false;
+
+          const cameraName =
+            currentFacingMode === "environment"
+              ? "Rear camera"
+              : "Front camera";
 
           if (resumeVoice) {
             recognitionWanted = true;
@@ -3542,13 +3705,31 @@ Speak naturally. The page will move with you.`;
             cameraRecoveryPending = true;
             recognitionWatchdogRetries = 0;
             lastRecognitionResultAt = 0;
-            showCaption("Camera switched. Starting a fresh Voice Match engine…");
+
+            showCaption(
+              `${cameraName} active. Starting a fresh Voice Match engine…`
+            );
             window.setTimeout(beginRecognition, 500);
           } else {
-            showCaption("Camera switched.");
+            showCaption(`${cameraName} active.`);
           }
         } catch (error) {
           cameraTransitionActive = false;
+
+          // Try to restore the camera that was active before the failed switch.
+          try {
+            const restoredStream = await requestCameraForFacing(
+              previousFacingMode
+            );
+
+            currentFacingMode = previousFacingMode;
+            await attachCameraStream(restoredStream);
+          } catch (_) {
+            cameraStream = null;
+            cameraVisible = false;
+            els.cameraPreview.srcObject = null;
+            updateCameraUi();
+          }
 
           if (resumeVoice) {
             recognitionWanted = true;
@@ -3556,7 +3737,16 @@ Speak naturally. The page will move with you.`;
             window.setTimeout(beginRecognition, 350);
           }
 
-          showCaption(`Unable to switch cameras: ${escapeHtml(error?.message || "unknown error")}`, true);
+          showCaption(
+            `Unable to open the ${
+              nextFacingMode === "environment" ? "rear" : "front"
+            } camera: ${escapeHtml(
+              error?.message || "camera unavailable"
+            )}`,
+            true
+          );
+        } finally {
+          updateCameraUi();
         }
       };
 
@@ -3809,7 +3999,10 @@ Speak naturally. The page will move with you.`;
 
       els.mirrorBtn.addEventListener("click", () => {
         els.script.classList.toggle("mirrored");
-        els.mirrorBtn.textContent = els.script.classList.contains("mirrored") ? "Unmirror" : "Mirror";
+        els.mirrorBtn.textContent =
+          els.script.classList.contains("mirrored")
+            ? "Unmirror Text"
+            : "Mirror Text";
       });
 
       els.fullscreenBtn.addEventListener("click", async () => {
@@ -3884,7 +4077,7 @@ Speak naturally. The page will move with you.`;
       if (!SpeechRecognition) {
         showCaption("Voice recognition is unavailable in this browser. Timed scroll still works; use current Chrome or Edge for voice follow.", true);
       } else {
-        showCaption("v1.27 adds mobile text-safe padding, a scrollable compact toolbar, and Video only preview.");
+        showCaption("v1.28 restores full-brightness Video only preview and strengthens front/rear camera switching.");
       }
 
       document.addEventListener("visibilitychange", () => {
