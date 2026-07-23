@@ -1,4 +1,4 @@
-const CACHE_NAME = "voiceprompt-v1.23-editor-scroll";
+const CACHE_NAME = "voiceprompt-v1.24-editor-export-fix";
 const APP_FILES = [
   "./",
   "./index.html",

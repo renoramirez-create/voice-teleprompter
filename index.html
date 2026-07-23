@@ -14,7 +14,7 @@
   <link rel="icon" href="favicon.ico" sizes="any" />
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
-  <title>VoicePrompt Teleprompter v1.23</title>
+  <title>VoicePrompt Teleprompter v1.24</title>
   <style>
     :root {
       --bg: #05090a;
@@ -591,13 +591,24 @@
       position: sticky;
       z-index: 4;
       bottom: 0;
-      display: flex;
-      gap: 10px;
-      justify-content: flex-end;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 5px;
       margin: 0 -20px -20px;
-      padding: 14px 20px 18px;
+      padding: 10px 12px 12px;
       border-top: 1px solid #233b3f;
       background: #081012;
+    }
+
+    .editor-actions button {
+      min-width: 0;
+      min-height: 34px;
+      padding: 7px 4px;
+      border-radius: 9px;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1;
+      white-space: nowrap;
     }
 
     textarea {
@@ -1033,13 +1044,17 @@
 
       .editor-actions {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 4px;
         margin: 0 -14px -14px;
-        padding: 12px 14px 14px;
+        padding: 9px 7px 10px;
       }
 
-      .editor-actions .primary {
-        grid-column: 1 / -1;
+      .editor-actions button {
+        min-height: 32px;
+        padding: 6px 2px;
+        font-size: 10px;
+        letter-spacing: -0.01em;
       }
 
       .caption { bottom: 8px; }
@@ -1279,9 +1294,31 @@
       }
 
       .editor-actions {
-        padding-top: 9px;
-        padding-bottom: 10px;
+        padding-top: 7px;
+        padding-bottom: 8px;
       }
+    }
+
+  
+    /* v1.24 layer order: toolbar always stays above editors and exports */
+    .toolbar {
+      z-index: 1000 !important;
+    }
+
+    .toolbar-toggle-dock {
+      z-index: 1001 !important;
+    }
+
+    .record-review {
+      z-index: 120 !important;
+    }
+
+    .countdown-overlay {
+      z-index: 110 !important;
+    }
+
+    .editor {
+      z-index: 100 !important;
     }
 
   </style>
@@ -1290,7 +1327,7 @@
   <main class="app">
     <header id="toolbar" class="toolbar">
       <div class="brand">Voice<span>Prompt</span></div>
-      <span class="version-badge" aria-label="App version 1.23" title="VoicePrompt version 1.23">v1.23</span>
+      <span class="version-badge" aria-label="App version 1.24" title="VoicePrompt version 1.24">v1.24</span>
 
       <button id="editBtn" title="Open or edit script">Script</button>
       <button id="startBtn" class="primary">Start listening</button>
@@ -1385,8 +1422,9 @@
         <div class="editor-actions">
           <button id="closeEditorBtn" type="button">Close</button>
           <button id="pasteBtn" type="button">Paste</button>
-          <button id="sampleBtn" type="button">Load sample</button>
-          <button id="saveBtn" class="primary" type="button">Use this script</button>
+          <button id="sampleBtn" type="button">Load</button>
+          <button id="deleteScriptBtn" class="danger" type="button">Delete</button>
+          <button id="saveBtn" class="primary" type="button">Use script</button>
         </div>
       </section>
 
@@ -1432,6 +1470,7 @@
         toolbarToggle: document.getElementById("toolbarToggle"),
         editBtn: document.getElementById("editBtn"),
         closeEditorBtn: document.getElementById("closeEditorBtn"),
+        deleteScriptBtn: document.getElementById("deleteScriptBtn"),
         saveBtn: document.getElementById("saveBtn"),
         sampleBtn: document.getElementById("sampleBtn"),
         startBtn: document.getElementById("startBtn"),
@@ -1726,6 +1765,11 @@
 
       const storageSet = (key, value) => {
         try { window.localStorage.setItem(key, value); }
+        catch (_) { /* Storage may be blocked for local files or private browsing. */ }
+      };
+
+      const storageRemove = (key) => {
+        try { window.localStorage.removeItem(key); }
         catch (_) { /* Storage may be blocked for local files or private browsing. */ }
       };
 
@@ -3062,7 +3106,7 @@ Speak naturally. The page will move with you.`;
           );
 
           if (existing) {
-            if (window.FFmpeg?.createFFmpeg) {
+            if (window.FFmpegWASM?.FFmpeg) {
               resolve();
             } else {
               existing.addEventListener("load", resolve, { once: true });
@@ -3075,36 +3119,83 @@ Speak naturally. The page will move with you.`;
           script.src = src;
           script.async = true;
           script.crossOrigin = "anonymous";
+          script.referrerPolicy = "no-referrer";
           script.addEventListener("load", resolve, { once: true });
-          script.addEventListener("error", () => reject(
-            new Error("The file converter could not be downloaded.")
-          ), { once: true });
+          script.addEventListener(
+            "error",
+            () => reject(new Error("The file-conversion library could not be downloaded.")),
+            { once: true }
+          );
           document.head.appendChild(script);
         });
 
+      const fetchAsBlobUrl = async (url, mimeType) => {
+        const response = await fetch(url, {
+          mode: "cors",
+          cache: "force-cache"
+        });
+
+        if (!response.ok) {
+          throw new Error(`Converter component failed to load (${response.status}).`);
+        }
+
+        const data = await response.arrayBuffer();
+        return URL.createObjectURL(
+          new Blob([data], { type: mimeType })
+        );
+      };
+
       const getFfmpegConverter = async () => {
-        if (ffmpegConverter?.isLoaded?.()) return ffmpegConverter;
+        if (ffmpegConverter?.loaded) return ffmpegConverter;
         if (ffmpegLoadPromise) return ffmpegLoadPromise;
 
         ffmpegLoadPromise = (async () => {
           showCaption(
-            "Loading the local file converter for the first time. Keep this tab open…"
+            "Loading the video converter. The first load downloads about 32 MB…"
           );
 
-          await loadExternalScript(
-            "https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"
-          );
+          const wrapperUrl =
+            "https://cdnjs.cloudflare.com/ajax/libs/ffmpeg/0.12.10/umd/ffmpeg.min.js";
+          const classWorkerSource =
+            "https://cdnjs.cloudflare.com/ajax/libs/ffmpeg/0.12.10/umd/814.ffmpeg.min.js";
+          const coreSource =
+            "https://cdnjs.cloudflare.com/ajax/libs/ffmpeg-core/0.12.10/umd/ffmpeg-core.min.js";
+          const wasmSource =
+            "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm";
 
-          if (!window.FFmpeg?.createFFmpeg || !window.FFmpeg?.fetchFile) {
-            throw new Error("The browser converter did not initialize.");
+          await loadExternalScript(wrapperUrl);
+
+          if (!window.FFmpegWASM?.FFmpeg) {
+            throw new Error("The current FFmpeg browser API did not initialize.");
           }
 
-          const converter = window.FFmpeg.createFFmpeg({
-            log: false,
-            corePath: "https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js"
+          const converter = new window.FFmpegWASM.FFmpeg();
+
+          converter.on("log", ({ message }) => {
+            console.debug("[VoicePrompt converter]", message);
           });
 
-          await converter.load();
+          converter.on("progress", ({ progress }) => {
+            if (!Number.isFinite(progress)) return;
+            const percentage = Math.max(0, Math.min(100, Math.round(progress * 100)));
+            els.saveRecordingBtn.textContent = `Converting ${percentage}%`;
+          });
+
+          // All worker and WebAssembly assets are converted to same-origin blob
+          // URLs. This prevents the cross-origin worker failure that stopped the
+          // former converter on both desktop and mobile browsers.
+          const [classWorkerURL, coreURL, wasmURL] = await Promise.all([
+            fetchAsBlobUrl(classWorkerSource, "text/javascript"),
+            fetchAsBlobUrl(coreSource, "text/javascript"),
+            fetchAsBlobUrl(wasmSource, "application/wasm")
+          ]);
+
+          await converter.load({
+            classWorkerURL,
+            coreURL,
+            wasmURL
+          });
+
           ffmpegConverter = converter;
           return converter;
         })();
@@ -3113,6 +3204,12 @@ Speak naturally. The page will move with you.`;
           return await ffmpegLoadPromise;
         } catch (error) {
           ffmpegLoadPromise = null;
+
+          if (ffmpegConverter) {
+            try { ffmpegConverter.terminate(); } catch (_) {}
+          }
+
+          ffmpegConverter = null;
           throw error;
         }
       };
@@ -3124,9 +3221,10 @@ Speak naturally. The page will move with you.`;
           arguments: [
             "-c:v", "libx264",
             "-preset", "ultrafast",
-            "-crf", "23",
+            "-crf", "27",
+            "-pix_fmt", "yuv420p",
             "-c:a", "aac",
-            "-b:a", "192k",
+            "-b:a", "160k",
             "-movflags", "+faststart"
           ]
         },
@@ -3136,9 +3234,10 @@ Speak naturally. The page will move with you.`;
           arguments: [
             "-c:v", "libx264",
             "-preset", "ultrafast",
-            "-crf", "23",
+            "-crf", "27",
+            "-pix_fmt", "yuv420p",
             "-c:a", "aac",
-            "-b:a", "192k"
+            "-b:a", "160k"
           ]
         },
         avi: {
@@ -3146,9 +3245,9 @@ Speak naturally. The page will move with you.`;
           mimeType: "video/x-msvideo",
           arguments: [
             "-c:v", "mpeg4",
-            "-q:v", "5",
+            "-q:v", "7",
             "-c:a", "libmp3lame",
-            "-b:a", "192k"
+            "-b:a", "160k"
           ]
         },
         mp3: {
@@ -3156,6 +3255,8 @@ Speak naturally. The page will move with you.`;
           mimeType: "audio/mpeg",
           arguments: [
             "-vn",
+            "-ac", "2",
+            "-ar", "44100",
             "-c:a", "libmp3lame",
             "-b:a", "192k"
           ]
@@ -3169,8 +3270,16 @@ Speak naturally. The page will move with you.`;
           (format === "mp4" && type.includes("mp4")) ||
           (format === "mov" && type.includes("quicktime")) ||
           (format === "avi" && (type.includes("avi") || type.includes("msvideo"))) ||
-          (format === "mp3" && type.includes("mpeg"))
+          (format === "mp3" && type.includes("audio/mpeg"))
         );
+      };
+
+      const safeConverterDelete = async (converter, path) => {
+        try {
+          await converter.deleteFile(path);
+        } catch (_) {
+          // The file may not exist after a failed conversion.
+        }
       };
 
       const saveRecording = async () => {
@@ -3195,46 +3304,62 @@ Speak naturally. The page will move with you.`;
         els.exportFormat.disabled = true;
         els.saveRecordingBtn.textContent = "Loading converter…";
 
+        const inputExtension = recordedBlob.type.includes("mp4") ? "mp4" : "webm";
+        const uniqueId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const inputName = `input-${uniqueId}.${inputExtension}`;
+        const outputName = `output-${uniqueId}.${profile.extension}`;
+
         try {
           const converter = await getFfmpegConverter();
-          const fetchFile = window.FFmpeg.fetchFile;
-          const inputExtension = recordedBlob.type.includes("mp4") ? "mp4" : "webm";
-          const inputName = `input-${Date.now()}.${inputExtension}`;
-          const outputName = `output-${Date.now()}.${profile.extension}`;
 
-          els.saveRecordingBtn.textContent = "Converting…";
+          els.saveRecordingBtn.textContent = "Preparing…";
           showCaption(
-            `Converting to <strong>${profile.extension.toUpperCase()}</strong> inside this browser. Longer recordings may take time.`
+            `Converting to <strong>${profile.extension.toUpperCase()}</strong> inside this browser. Keep the page open.`
           );
 
-          converter.FS("writeFile", inputName, await fetchFile(recordedBlob));
-          await converter.run(
+          const inputBytes = new Uint8Array(
+            await recordedBlob.arrayBuffer()
+          );
+
+          await converter.writeFile(inputName, inputBytes);
+
+          const exitCode = await converter.exec([
             "-i",
             inputName,
             ...profile.arguments,
             outputName
-          );
+          ]);
 
-          const data = converter.FS("readFile", outputName);
+          if (exitCode !== 0) {
+            throw new Error(`FFmpeg stopped with code ${exitCode}.`);
+          }
+
+          const data = await converter.readFile(outputName);
+
+          if (!(data instanceof Uint8Array) || data.byteLength === 0) {
+            throw new Error("The converter returned an empty file.");
+          }
+
           const convertedBlob = new Blob(
-            [data.buffer],
+            [data],
             { type: profile.mimeType }
           );
 
           triggerFileDownload(convertedBlob, outputFileName);
-
-          try { converter.FS("unlink", inputName); } catch (_) {}
-          try { converter.FS("unlink", outputName); } catch (_) {}
-
           showCaption(
-            `${profile.extension.toUpperCase()} conversion complete and download started.`
+            `${profile.extension.toUpperCase()} conversion complete. The download has started.`
           );
         } catch (error) {
           showCaption(
-            `Unable to convert this recording: <strong>${escapeHtml(error?.message || "conversion failed")}</strong>. An internet connection is required the first time the converter loads.`,
+            `Unable to create the selected format: <strong>${escapeHtml(error?.message || "conversion failed")}</strong>. Check your connection and available device memory, then try again.`,
             true
           );
         } finally {
+          if (ffmpegConverter?.loaded) {
+            await safeConverterDelete(ffmpegConverter, inputName);
+            await safeConverterDelete(ffmpegConverter, outputName);
+          }
+
           els.saveRecordingBtn.disabled = false;
           els.exportFormat.disabled = false;
           els.saveRecordingBtn.textContent = originalButtonText;
@@ -3299,6 +3424,16 @@ Speak naturally. The page will move with you.`;
       els.closeEditorBtn.addEventListener("click", () => {
         els.editor.classList.add("hidden");
         setEditorMessage("Editor closed. Your current teleprompter script remains active.");
+      });
+
+      els.deleteScriptBtn.addEventListener("click", () => {
+        pauseAll();
+        storageRemove("voicePromptScript");
+        els.scriptInput.value = "";
+        parseScript("");
+        els.scriptInput.focus();
+        setEditorMessage("Script deleted. Paste or write a new script.", "success");
+        showCaption("The saved script was deleted. Add a new script when ready.");
       });
 
       els.toolbarToggle.addEventListener("click", () => {
@@ -3462,7 +3597,7 @@ Speak naturally. The page will move with you.`;
       if (!SpeechRecognition) {
         showCaption("Voice recognition is unavailable in this browser. Timed scroll still works; use current Chrome or Edge for voice follow.", true);
       } else {
-        showCaption("v1.23 keeps long scripts scrollable and pins the editor controls to the bottom.");
+        showCaption("v1.24 adds a compact script toolbar, script deletion, fixed popup layering, and a rebuilt format converter.");
       }
 
       document.addEventListener("visibilitychange", () => {
