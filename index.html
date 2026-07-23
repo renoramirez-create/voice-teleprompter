@@ -14,7 +14,7 @@
   <link rel="icon" href="favicon.ico" sizes="any" />
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
-  <title>VoicePrompt Teleprompter v1.24</title>
+  <title>VoicePrompt Teleprompter v1.25</title>
   <style>
     :root {
       --bg: #05090a;
@@ -1327,7 +1327,7 @@
   <main class="app">
     <header id="toolbar" class="toolbar">
       <div class="brand">Voice<span>Prompt</span></div>
-      <span class="version-badge" aria-label="App version 1.24" title="VoicePrompt version 1.24">v1.24</span>
+      <span class="version-badge" aria-label="App version 1.25" title="VoicePrompt version 1.25">v1.25</span>
 
       <button id="editBtn" title="Open or edit script">Script</button>
       <button id="startBtn" class="primary">Start listening</button>
@@ -1447,7 +1447,7 @@
             </select>
           </label>
 
-          <button id="saveRecordingBtn" class="primary" type="button">Save file</button>
+          <button id="saveRecordingBtn" class="primary" type="button">Prepare file</button>
         </div>
       </section>
     </section>
@@ -1567,6 +1567,7 @@
 
       let ffmpegConverter = null;
       let ffmpegLoadPromise = null;
+      let preparedExport = null;
 
       const cameraAspectProfiles = {
         "16:9": { ratio: 16 / 9, width: 1920, height: 1080 },
@@ -1750,12 +1751,49 @@
       const triggerFileDownload = (blob, fileName) => {
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
+
         link.href = url;
         link.download = fileName;
+        link.rel = "noopener";
+        link.style.display = "none";
+
         document.body.appendChild(link);
         link.click();
-        link.remove();
-        window.setTimeout(() => URL.revokeObjectURL(url), 1200);
+
+        window.setTimeout(() => {
+          link.remove();
+          URL.revokeObjectURL(url);
+        }, 60000);
+      };
+
+      const saveBlobWithUserGesture = async (blob, fileName, mimeType) => {
+        // Desktop Chromium can write directly to the selected file. This call
+        // happens only on the second, explicit Download button press.
+        if (typeof window.showSaveFilePicker === "function") {
+          try {
+            const extension = `.${fileName.split(".").pop()}`;
+            const handle = await window.showSaveFilePicker({
+              suggestedName: fileName,
+              types: [{
+                description: "VoicePrompt recording",
+                accept: {
+                  [mimeType || "application/octet-stream"]: [extension]
+                }
+              }]
+            });
+
+            const writable = await handle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            return "picker";
+          } catch (error) {
+            if (error?.name === "AbortError") return "canceled";
+            // Fall through to an ordinary browser download.
+          }
+        }
+
+        triggerFileDownload(blob, fileName);
+        return "download";
       };
 
       const storageGet = (key) => {
@@ -2692,6 +2730,8 @@ Speak naturally. The page will move with you.`;
 
       const clearRecordingPreview = () => {
         if (recordingCountdownActive) cancelRecordingCountdown();
+        preparedExport = null;
+        els.saveRecordingBtn.textContent = "Prepare file";
         if (recordingUrl) URL.revokeObjectURL(recordingUrl);
         recordingUrl = null;
         recordedBlob = null;
@@ -2737,10 +2777,12 @@ Speak naturally. The page will move with you.`;
 
         const type = mediaRecorder?.mimeType || recordedChunks[0]?.type || "video/webm";
         recordedBlob = new Blob(recordedChunks, { type });
+        preparedExport = null;
+        els.saveRecordingBtn.textContent = "Prepare file";
         const extension = type.includes("mp4") ? "mp4" : "webm";
         const stamp = new Date().toISOString().replace(/[:.]/g, "-");
         recordingFileName = `teleprompter-recording-${stamp}.${extension}`;
-        showCaption("Recording complete. Choose MP4, Apple MOV, AVI, or MP3 audio, then save.");
+        showCaption("Recording complete. Choose a format, prepare it, then press Download when ready.");
         showRecordingPreview();
       };
 
@@ -3119,11 +3161,12 @@ Speak naturally. The page will move with you.`;
           script.src = src;
           script.async = true;
           script.crossOrigin = "anonymous";
-          script.referrerPolicy = "no-referrer";
           script.addEventListener("load", resolve, { once: true });
           script.addEventListener(
             "error",
-            () => reject(new Error("The file-conversion library could not be downloaded.")),
+            () => reject(
+              new Error("The FFmpeg wrapper could not be downloaded.")
+            ),
             { once: true }
           );
           document.head.appendChild(script);
@@ -3136,10 +3179,13 @@ Speak naturally. The page will move with you.`;
         });
 
         if (!response.ok) {
-          throw new Error(`Converter component failed to load (${response.status}).`);
+          throw new Error(
+            `Converter component failed to load (${response.status}).`
+          );
         }
 
         const data = await response.arrayBuffer();
+
         return URL.createObjectURL(
           new Blob([data], { type: mimeType })
         );
@@ -3151,22 +3197,21 @@ Speak naturally. The page will move with you.`;
 
         ffmpegLoadPromise = (async () => {
           showCaption(
-            "Loading the video converter. The first load downloads about 32 MB…"
+            "Loading the converter for the first time. This downloads about 32 MB…"
           );
 
-          const wrapperUrl =
-            "https://cdnjs.cloudflare.com/ajax/libs/ffmpeg/0.12.10/umd/ffmpeg.min.js";
+          // Correct package paths from the official @ffmpeg packages.
+          const wrapperURL =
+            "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js";
           const classWorkerSource =
-            "https://cdnjs.cloudflare.com/ajax/libs/ffmpeg/0.12.10/umd/814.ffmpeg.min.js";
-          const coreSource =
-            "https://cdnjs.cloudflare.com/ajax/libs/ffmpeg-core/0.12.10/umd/ffmpeg-core.min.js";
-          const wasmSource =
-            "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm";
+            "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js";
+          const coreBaseURL =
+            "https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd";
 
-          await loadExternalScript(wrapperUrl);
+          await loadExternalScript(wrapperURL);
 
           if (!window.FFmpegWASM?.FFmpeg) {
-            throw new Error("The current FFmpeg browser API did not initialize.");
+            throw new Error("FFmpeg did not initialize in this browser.");
           }
 
           const converter = new window.FFmpegWASM.FFmpeg();
@@ -3177,17 +3222,25 @@ Speak naturally. The page will move with you.`;
 
           converter.on("progress", ({ progress }) => {
             if (!Number.isFinite(progress)) return;
-            const percentage = Math.max(0, Math.min(100, Math.round(progress * 100)));
+
+            const percentage = Math.max(
+              0,
+              Math.min(100, Math.round(progress * 100))
+            );
+
             els.saveRecordingBtn.textContent = `Converting ${percentage}%`;
           });
 
-          // All worker and WebAssembly assets are converted to same-origin blob
-          // URLs. This prevents the cross-origin worker failure that stopped the
-          // former converter on both desktop and mobile browsers.
           const [classWorkerURL, coreURL, wasmURL] = await Promise.all([
             fetchAsBlobUrl(classWorkerSource, "text/javascript"),
-            fetchAsBlobUrl(coreSource, "text/javascript"),
-            fetchAsBlobUrl(wasmSource, "application/wasm")
+            fetchAsBlobUrl(
+              `${coreBaseURL}/ffmpeg-core.js`,
+              "text/javascript"
+            ),
+            fetchAsBlobUrl(
+              `${coreBaseURL}/ffmpeg-core.wasm`,
+              "application/wasm"
+            )
           ]);
 
           await converter.load({
@@ -3216,49 +3269,79 @@ Speak naturally. The page will move with you.`;
 
       const exportProfiles = {
         mp4: {
+          label: "MP4",
           extension: "mp4",
           mimeType: "video/mp4",
-          arguments: [
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-crf", "27",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
-            "-b:a", "160k",
-            "-movflags", "+faststart"
+          argumentSets: [
+            [
+              "-c:v", "libx264",
+              "-preset", "ultrafast",
+              "-crf", "28",
+              "-pix_fmt", "yuv420p",
+              "-c:a", "aac",
+              "-b:a", "160k",
+              "-movflags", "+faststart"
+            ],
+            [
+              "-c:v", "mpeg4",
+              "-q:v", "6",
+              "-c:a", "aac",
+              "-b:a", "160k",
+              "-movflags", "+faststart"
+            ]
           ]
         },
         mov: {
+          label: "MOV",
           extension: "mov",
           mimeType: "video/quicktime",
-          arguments: [
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-crf", "27",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
-            "-b:a", "160k"
+          argumentSets: [
+            [
+              "-c:v", "libx264",
+              "-preset", "ultrafast",
+              "-crf", "28",
+              "-pix_fmt", "yuv420p",
+              "-c:a", "aac",
+              "-b:a", "160k"
+            ],
+            [
+              "-c:v", "mpeg4",
+              "-q:v", "6",
+              "-c:a", "aac",
+              "-b:a", "160k"
+            ]
           ]
         },
         avi: {
+          label: "AVI",
           extension: "avi",
           mimeType: "video/x-msvideo",
-          arguments: [
-            "-c:v", "mpeg4",
-            "-q:v", "7",
-            "-c:a", "libmp3lame",
-            "-b:a", "160k"
+          argumentSets: [
+            [
+              "-c:v", "mpeg4",
+              "-q:v", "7",
+              "-c:a", "libmp3lame",
+              "-b:a", "160k"
+            ],
+            [
+              "-c:v", "mpeg4",
+              "-q:v", "7",
+              "-c:a", "pcm_s16le"
+            ]
           ]
         },
         mp3: {
+          label: "MP3",
           extension: "mp3",
           mimeType: "audio/mpeg",
-          arguments: [
-            "-vn",
-            "-ac", "2",
-            "-ar", "44100",
-            "-c:a", "libmp3lame",
-            "-b:a", "192k"
+          argumentSets: [
+            [
+              "-vn",
+              "-ac", "2",
+              "-ar", "44100",
+              "-c:a", "libmp3lame",
+              "-b:a", "192k"
+            ]
           ]
         }
       };
@@ -3269,7 +3352,10 @@ Speak naturally. The page will move with you.`;
         return (
           (format === "mp4" && type.includes("mp4")) ||
           (format === "mov" && type.includes("quicktime")) ||
-          (format === "avi" && (type.includes("avi") || type.includes("msvideo"))) ||
+          (format === "avi" && (
+            type.includes("avi") ||
+            type.includes("msvideo")
+          )) ||
           (format === "mp3" && type.includes("audio/mpeg"))
         );
       };
@@ -3278,8 +3364,72 @@ Speak naturally. The page will move with you.`;
         try {
           await converter.deleteFile(path);
         } catch (_) {
-          // The file may not exist after a failed conversion.
+          // The file may not exist after a failed conversion attempt.
         }
+      };
+
+      const runConversionWithFallback = async (
+        converter,
+        inputName,
+        outputName,
+        profile
+      ) => {
+        let lastError = null;
+
+        for (let index = 0; index < profile.argumentSets.length; index++) {
+          const argumentsForAttempt = profile.argumentSets[index];
+
+          await safeConverterDelete(converter, outputName);
+
+          try {
+            const exitCode = await converter.exec([
+              "-y",
+              "-i",
+              inputName,
+              ...argumentsForAttempt,
+              outputName
+            ]);
+
+            if (exitCode !== 0) {
+              throw new Error(
+                `${profile.label} encoder attempt ${index + 1} stopped with code ${exitCode}.`
+              );
+            }
+
+            const data = await converter.readFile(outputName);
+
+            if (!(data instanceof Uint8Array) || data.byteLength === 0) {
+              throw new Error("The converter returned an empty file.");
+            }
+
+            return data;
+          } catch (error) {
+            lastError = error;
+          }
+        }
+
+        throw lastError || new Error(
+          `${profile.label} conversion was unsuccessful.`
+        );
+      };
+
+      const downloadPreparedExport = async () => {
+        if (!preparedExport) return;
+
+        const result = await saveBlobWithUserGesture(
+          preparedExport.blob,
+          preparedExport.fileName,
+          preparedExport.mimeType
+        );
+
+        if (result === "canceled") {
+          showCaption("Save canceled. The prepared file is still ready.");
+          return;
+        }
+
+        showCaption(
+          `${preparedExport.label} save started.`
+        );
       };
 
       const saveRecording = async () => {
@@ -3289,13 +3439,30 @@ Speak naturally. The page will move with you.`;
         const profile = exportProfiles[format];
         if (!profile) return;
 
+        // Second click: now it is a direct user gesture, so desktop file
+        // pickers and mobile browser downloads are allowed to open.
+        if (preparedExport?.format === format) {
+          await downloadPreparedExport();
+          return;
+        }
+
         const stamp = new Date().toISOString().replace(/[:.]/g, "-");
         const outputFileName =
           `teleprompter-recording-${stamp}.${profile.extension}`;
 
         if (recordedBlobAlreadyMatches(format)) {
-          triggerFileDownload(recordedBlob, outputFileName);
-          showCaption(`${profile.extension.toUpperCase()} file saved.`);
+          preparedExport = {
+            format,
+            label: profile.label,
+            blob: recordedBlob,
+            fileName: outputFileName,
+            mimeType: profile.mimeType
+          };
+
+          els.saveRecordingBtn.textContent = `Download ${profile.label}`;
+          showCaption(
+            `${profile.label} is ready. Press <strong>Download ${profile.label}</strong>.`
+          );
           return;
         }
 
@@ -3304,17 +3471,30 @@ Speak naturally. The page will move with you.`;
         els.exportFormat.disabled = true;
         els.saveRecordingBtn.textContent = "Loading converter…";
 
-        const inputExtension = recordedBlob.type.includes("mp4") ? "mp4" : "webm";
-        const uniqueId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const inputName = `input-${uniqueId}.${inputExtension}`;
-        const outputName = `output-${uniqueId}.${profile.extension}`;
+        const inputExtension =
+          recordedBlob.type.includes("mp4") ? "mp4" : "webm";
+        const uniqueId =
+          `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const inputName =
+          `input-${uniqueId}.${inputExtension}`;
+        const outputName =
+          `output-${uniqueId}.${profile.extension}`;
 
         try {
+          if (
+            /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) &&
+            recordedBlob.size > 180 * 1024 * 1024
+          ) {
+            throw new Error(
+              "This recording is too large for reliable phone conversion. Use a shorter recording or save the original MP4."
+            );
+          }
+
           const converter = await getFfmpegConverter();
 
           els.saveRecordingBtn.textContent = "Preparing…";
           showCaption(
-            `Converting to <strong>${profile.extension.toUpperCase()}</strong> inside this browser. Keep the page open.`
+            `Converting to <strong>${profile.label}</strong>. Keep this page open.`
           );
 
           const inputBytes = new Uint8Array(
@@ -3323,35 +3503,38 @@ Speak naturally. The page will move with you.`;
 
           await converter.writeFile(inputName, inputBytes);
 
-          const exitCode = await converter.exec([
-            "-i",
+          const data = await runConversionWithFallback(
+            converter,
             inputName,
-            ...profile.arguments,
-            outputName
-          ]);
-
-          if (exitCode !== 0) {
-            throw new Error(`FFmpeg stopped with code ${exitCode}.`);
-          }
-
-          const data = await converter.readFile(outputName);
-
-          if (!(data instanceof Uint8Array) || data.byteLength === 0) {
-            throw new Error("The converter returned an empty file.");
-          }
+            outputName,
+            profile
+          );
 
           const convertedBlob = new Blob(
             [data],
             { type: profile.mimeType }
           );
 
-          triggerFileDownload(convertedBlob, outputFileName);
+          preparedExport = {
+            format,
+            label: profile.label,
+            blob: convertedBlob,
+            fileName: outputFileName,
+            mimeType: profile.mimeType
+          };
+
+          els.saveRecordingBtn.textContent =
+            `Download ${profile.label}`;
+
           showCaption(
-            `${profile.extension.toUpperCase()} conversion complete. The download has started.`
+            `${profile.label} is ready. Press <strong>Download ${profile.label}</strong> to save it.`
           );
         } catch (error) {
+          preparedExport = null;
+          els.saveRecordingBtn.textContent = "Prepare file";
+
           showCaption(
-            `Unable to create the selected format: <strong>${escapeHtml(error?.message || "conversion failed")}</strong>. Check your connection and available device memory, then try again.`,
+            `Unable to prepare ${profile.label}: <strong>${escapeHtml(error?.message || "conversion failed")}</strong>`,
             true
           );
         } finally {
@@ -3362,7 +3545,10 @@ Speak naturally. The page will move with you.`;
 
           els.saveRecordingBtn.disabled = false;
           els.exportFormat.disabled = false;
-          els.saveRecordingBtn.textContent = originalButtonText;
+
+          if (!preparedExport && els.saveRecordingBtn.textContent.includes("Converting")) {
+            els.saveRecordingBtn.textContent = originalButtonText;
+          }
         }
       };
 
@@ -3417,6 +3603,17 @@ Speak naturally. The page will move with you.`;
       els.flipCameraBtn.addEventListener("click", flipCamera);
       els.closeReviewBtn.addEventListener("click", () => els.recordReview.classList.add("hidden"));
       els.deleteRecordingBtn.addEventListener("click", clearRecordingPreview);
+      els.exportFormat.addEventListener("change", () => {
+        preparedExport = null;
+        els.saveRecordingBtn.textContent = "Prepare file";
+        const selectedLabel =
+          els.exportFormat.options[els.exportFormat.selectedIndex]?.text ||
+          "selected format";
+        showCaption(
+          `${escapeHtml(selectedLabel)} selected. Press <strong>Prepare file</strong>.`
+        );
+      });
+
       els.saveRecordingBtn.addEventListener("click", saveRecording);
 
       els.pasteBtn.addEventListener("click", pasteFromClipboard);
@@ -3597,7 +3794,7 @@ Speak naturally. The page will move with you.`;
       if (!SpeechRecognition) {
         showCaption("Voice recognition is unavailable in this browser. Timed scroll still works; use current Chrome or Edge for voice follow.", true);
       } else {
-        showCaption("v1.24 adds a compact script toolbar, script deletion, fixed popup layering, and a rebuilt format converter.");
+        showCaption("v1.25 fixes converter package paths and separates conversion from the final user-initiated download.");
       }
 
       document.addEventListener("visibilitychange", () => {
