@@ -1,4 +1,4 @@
-const CACHE_NAME = "voiceprompt-v1.26-mp4-repeat-position";
+const CACHE_NAME = "voiceprompt-v1.27-mobile-layout-preview";
 const APP_FILES = [
   "./",
   "./index.html",
