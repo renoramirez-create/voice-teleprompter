@@ -14,7 +14,7 @@
   <link rel="icon" href="favicon.ico" sizes="any" />
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
-  <title>VoicePrompt Teleprompter v1.29</title>
+  <title>VoicePrompt Teleprompter v1.30</title>
   <style>
     :root {
       --bg: #05090a;
@@ -1628,13 +1628,189 @@
       }
     }
 
+  
+    /* v1.30 floating camera controls */
+    .camera-control {
+      right: max(10px, env(safe-area-inset-right)) !important;
+      top: 50% !important;
+      bottom: auto !important;
+      left: auto;
+      transform: translateY(-50%);
+      flex-direction: column;
+      align-items: stretch;
+      gap: 7px;
+      width: 102px;
+      max-width: 108px;
+      padding: 7px;
+    }
+
+    .camera-control button {
+      width: 100%;
+      min-height: 39px;
+    }
+
+    .camera-drag-handle {
+      width: 100% !important;
+      min-width: 0 !important;
+      height: 24px;
+      min-height: 24px !important;
+      letter-spacing: 1px;
+    }
+
+    .camera-control .flip-control {
+      width: 100%;
+    }
+
+    .record-dock {
+      position: fixed;
+      z-index: 5001;
+      left: 50%;
+      bottom: max(18px, env(safe-area-inset-bottom));
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 7px;
+      transform: translateX(-50%);
+      pointer-events: auto;
+    }
+
+    .record-dock.hidden {
+      display: none !important;
+    }
+
+    .record-circle {
+      position: relative !important;
+      display: grid;
+      place-items: center;
+      width: 88px !important;
+      min-width: 88px !important;
+      height: 88px !important;
+      min-height: 88px !important;
+      padding: 0 !important;
+      overflow: hidden;
+      border: 4px solid rgba(255, 255, 255, 0.94) !important;
+      border-radius: 50% !important;
+      background: #090d0e !important;
+      box-shadow:
+        0 12px 30px rgba(0, 0, 0, 0.72),
+        0 0 0 5px rgba(0, 0, 0, 0.38) !important;
+      color: #ffffff;
+      touch-action: manipulation;
+    }
+
+    .record-circle:disabled {
+      opacity: 0.42;
+    }
+
+    .record-circle:not(:disabled):active {
+      transform: scale(0.96) !important;
+    }
+
+    .record-glyph {
+      position: absolute;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: #f23b48;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+    }
+
+    .record-label {
+      position: relative;
+      z-index: 1;
+      margin-top: 1px;
+      color: #ffffff;
+      font-size: 11px;
+      font-weight: 950;
+      letter-spacing: 0.08em;
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.88);
+    }
+
+    .record-dock .recording-time {
+      min-width: 58px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(4, 8, 9, 0.92);
+      color: #ffffff;
+      font-size: 12px;
+      font-weight: 850;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      box-shadow: 0 5px 14px rgba(0, 0, 0, 0.52);
+    }
+
+    .record-circle.recording .record-glyph {
+      width: 34px;
+      height: 34px;
+      border-radius: 7px;
+    }
+
+    .record-circle.countdown .record-glyph,
+    .record-circle.starting .record-glyph {
+      display: none;
+    }
+
+    .record-circle.countdown .record-label {
+      margin: 0;
+      font-size: 34px;
+      letter-spacing: 0;
+    }
+
+    .record-circle.starting .record-label {
+      margin: 0;
+      max-width: 66px;
+      font-size: 10px;
+      line-height: 1.15;
+      letter-spacing: 0.02em;
+    }
+
+    body.video-only .record-dock {
+      display: flex !important;
+    }
+
+    body.video-only .record-dock.hidden {
+      display: none !important;
+    }
+
+    @media (max-width: 760px), (pointer: coarse) {
+      .camera-control {
+        right: max(7px, env(safe-area-inset-right)) !important;
+        top: 50% !important;
+        width: 88px;
+        max-width: 92px;
+        padding: 5px;
+        gap: 5px;
+      }
+
+      .camera-control button {
+        min-height: 35px;
+        font-size: 10px;
+      }
+
+      .record-circle {
+        width: 82px !important;
+        min-width: 82px !important;
+        height: 82px !important;
+        min-height: 82px !important;
+      }
+
+      .record-glyph {
+        width: 44px;
+        height: 44px;
+      }
+
+      .record-dock {
+        bottom: max(12px, env(safe-area-inset-bottom));
+      }
+    }
+
   </style>
 </head>
 <body>
   <main class="app">
     <header id="toolbar" class="toolbar">
       <div class="brand">Voice<span>Prompt</span></div>
-      <span class="version-badge" aria-label="App version 1.29" title="VoicePrompt version 1.29">v1.29</span>
+      <span class="version-badge" aria-label="App version 1.30" title="VoicePrompt version 1.30">v1.30</span>
 
       <button id="editBtn" title="Open or edit script">Script</button>
       <button id="startBtn" class="primary">Start listening</button>
@@ -1707,7 +1883,7 @@
       id="cameraControl"
       class="camera-control hidden"
       role="group"
-      aria-label="Camera and recording controls"
+      aria-label="Camera preview controls"
     >
       <button
         id="cameraDragHandle"
@@ -1718,13 +1894,6 @@
       >
         <span aria-hidden="true">⋮⋮</span>
       </button>
-
-      <button
-        id="recordBtn"
-        class="record-button camera-control-action"
-        type="button"
-        disabled
-      >● Rec <span id="recordingTime" class="recording-time">00:00</span></button>
 
       <button
         id="videoOnlyBtn"
@@ -1748,6 +1917,21 @@
         </svg>
         <span>FLIP</span>
       </button>
+    </div>
+
+    <div id="recordDock" class="record-dock hidden">
+      <button
+        id="recordBtn"
+        class="record-button record-circle"
+        type="button"
+        disabled
+        aria-label="Start recording"
+        title="Start recording"
+      >
+        <span id="recordGlyph" class="record-glyph" aria-hidden="true"></span>
+        <span id="recordLabel" class="record-label">REC</span>
+      </button>
+      <span id="recordingTime" class="recording-time">00:00</span>
     </div>
 
     <section class="stage">
@@ -1815,6 +1999,9 @@
         toolbarToggle: document.getElementById("toolbarToggle"),
         cameraControl: document.getElementById("cameraControl"),
         cameraDragHandle: document.getElementById("cameraDragHandle"),
+        recordDock: document.getElementById("recordDock"),
+        recordGlyph: document.getElementById("recordGlyph"),
+        recordLabel: document.getElementById("recordLabel"),
         videoOnlyBtn: document.getElementById("videoOnlyBtn"),
         editBtn: document.getElementById("editBtn"),
         closeEditorBtn: document.getElementById("closeEditorBtn"),
@@ -1907,6 +2094,7 @@
       let recordingCanvasContext = null;
       let recordingCanvasStream = null;
       let recordingCanvasFrame = null;
+      let recordingUsesCanvasVideo = false;
 
       let recordingCountdownActive = false;
       let recordingCountdownToken = 0;
@@ -2003,6 +2191,7 @@
         recordingCanvasStream = null;
         recordingCanvasContext = null;
         recordingCanvas = null;
+        recordingUsesCanvasVideo = false;
       };
 
       const drawVideoCover = (context, video, targetWidth, targetHeight) => {
@@ -2040,56 +2229,154 @@
         );
       };
 
-      const createDesktopAspectVideoTrack = () => {
+      const getRecordingCanvasProfile = () => {
+        if (isDesktopAspectMode()) {
+          return getSelectedAspectProfile();
+        }
+
+        const frameRect =
+          els.cameraFrame.getBoundingClientRect();
+
+        let ratio =
+          frameRect.width > 0 && frameRect.height > 0
+            ? frameRect.width / frameRect.height
+            : (
+                els.cameraPreview.videoWidth /
+                Math.max(1, els.cameraPreview.videoHeight)
+              );
+
+        ratio = Math.max(0.5, Math.min(2, ratio || (9 / 16)));
+
+        const maxDimension = 1280;
+        let width;
+        let height;
+
+        if (ratio >= 1) {
+          width = maxDimension;
+          height = Math.round(width / ratio);
+        } else {
+          height = maxDimension;
+          width = Math.round(height * ratio);
+        }
+
+        width = Math.max(2, Math.round(width / 2) * 2);
+        height = Math.max(2, Math.round(height / 2) * 2);
+
+        return {
+          value: "mobile-preview",
+          ratio,
+          width,
+          height
+        };
+      };
+
+      const createRecordingCanvasVideoTrack = () => {
         if (
-          !isDesktopAspectMode() ||
           typeof HTMLCanvasElement === "undefined" ||
           !HTMLCanvasElement.prototype.captureStream
         ) {
           return null;
         }
 
-        const profile = getSelectedAspectProfile();
-        const maxDimension = 1920;
+        const profile = getRecordingCanvasProfile();
+        const maxDimension = isDesktopAspectMode()
+          ? 1920
+          : 1280;
         const scale = Math.min(
           1,
-          maxDimension / Math.max(profile.width, profile.height)
+          maxDimension /
+            Math.max(profile.width, profile.height)
         );
-        const width = Math.max(2, Math.round(profile.width * scale / 2) * 2);
-        const height = Math.max(2, Math.round(profile.height * scale / 2) * 2);
+        const width = Math.max(
+          2,
+          Math.round(profile.width * scale / 2) * 2
+        );
+        const height = Math.max(
+          2,
+          Math.round(profile.height * scale / 2) * 2
+        );
 
         recordingCanvas = document.createElement("canvas");
         recordingCanvas.width = width;
         recordingCanvas.height = height;
-        recordingCanvasContext = recordingCanvas.getContext("2d", {
-          alpha: false,
-          desynchronized: true
-        });
+        recordingCanvasContext =
+          recordingCanvas.getContext("2d", {
+            alpha: false,
+            desynchronized: true
+          });
 
         if (!recordingCanvasContext) {
           stopComposedRecordingVideo();
           return null;
         }
 
+        recordingCanvasContext.fillStyle = "#000000";
+        recordingCanvasContext.fillRect(
+          0,
+          0,
+          width,
+          height
+        );
+
         const drawFrame = () => {
-          if (!recordingCanvasContext || !recordingCanvas) return;
+          if (
+            !recordingCanvasContext ||
+            !recordingCanvas
+          ) {
+            return;
+          }
 
-          recordingCanvasContext.fillStyle = "#000";
-          recordingCanvasContext.fillRect(0, 0, width, height);
-          drawVideoCover(
-            recordingCanvasContext,
-            els.cameraPreview,
-            width,
-            height
-          );
+          const previewReady =
+            !cameraTransitionActive &&
+            els.cameraPreview.readyState >= 2 &&
+            els.cameraPreview.videoWidth > 0 &&
+            els.cameraPreview.videoHeight > 0;
 
-          recordingCanvasFrame = requestAnimationFrame(drawFrame);
+          // During a lens switch, intentionally leave the canvas untouched.
+          // The last camera frame remains visible while the microphone and
+          // MediaRecorder continue without changing tracks.
+          if (previewReady) {
+            try {
+              recordingCanvasContext.fillStyle = "#000000";
+              recordingCanvasContext.fillRect(
+                0,
+                0,
+                width,
+                height
+              );
+
+              drawVideoCover(
+                recordingCanvasContext,
+                els.cameraPreview,
+                width,
+                height
+              );
+            } catch (_) {
+              // Preserve the previous canvas frame if the camera is between
+              // streams or the browser temporarily cannot draw the video.
+            }
+          }
+
+          recordingCanvasFrame =
+            requestAnimationFrame(drawFrame);
         };
 
         drawFrame();
-        recordingCanvasStream = recordingCanvas.captureStream(30);
 
-        return recordingCanvasStream.getVideoTracks()[0] || null;
+        recordingCanvasStream =
+          recordingCanvas.captureStream(30);
+
+        const track =
+          recordingCanvasStream.getVideoTracks()[0] ||
+          null;
+
+        if (track && "contentHint" in track) {
+          try {
+            track.contentHint = "motion";
+          } catch (_) {}
+        }
+
+        return track;
       };
 
       const wait = (milliseconds) =>
@@ -3238,9 +3525,16 @@ Speak naturally. The page will move with you.`;
         const reviewOpen =
           !els.recordReview.classList.contains("hidden");
 
+        const hidden =
+          !cameraReady || reviewOpen;
+
         els.cameraControl.classList.toggle(
           "hidden",
-          !cameraReady || reviewOpen
+          hidden
+        );
+        els.recordDock.classList.toggle(
+          "hidden",
+          hidden
         );
       };
 
@@ -3283,10 +3577,11 @@ Speak naturally. The page will move with you.`;
           `${Math.round(position.top)}px`;
         els.cameraControl.style.right = "auto";
         els.cameraControl.style.bottom = "auto";
+        els.cameraControl.style.transform = "none";
 
         if (persist) {
           storageSet(
-            "voicePromptCameraControlPosition",
+            "voicePromptCameraControlPositionV2",
             JSON.stringify(position)
           );
         }
@@ -3294,7 +3589,7 @@ Speak naturally. The page will move with you.`;
 
       const restoreCameraControlPosition = () => {
         const saved = storageGet(
-          "voicePromptCameraControlPosition"
+          "voicePromptCameraControlPositionV2"
         );
 
         if (!saved) return;
@@ -3314,7 +3609,7 @@ Speak naturally. The page will move with you.`;
           }
         } catch (_) {
           storageRemove(
-            "voicePromptCameraControlPosition"
+            "voicePromptCameraControlPositionV2"
           );
         }
       };
@@ -3521,6 +3816,63 @@ Speak naturally. The page will move with you.`;
         );
       };
 
+      const setRecordButtonVisual = (
+        mode = "idle",
+        value = ""
+      ) => {
+        els.recordBtn.classList.toggle(
+          "recording",
+          mode === "recording"
+        );
+        els.recordBtn.classList.toggle(
+          "countdown",
+          mode === "countdown"
+        );
+        els.recordBtn.classList.toggle(
+          "starting",
+          mode === "starting"
+        );
+
+        if (mode === "recording") {
+          els.recordLabel.textContent = "STOP";
+          els.recordBtn.setAttribute(
+            "aria-label",
+            "Stop recording"
+          );
+          els.recordBtn.title = "Stop recording";
+          return;
+        }
+
+        if (mode === "countdown") {
+          els.recordLabel.textContent = String(value);
+          els.recordBtn.setAttribute(
+            "aria-label",
+            `Cancel recording countdown ${value}`
+          );
+          els.recordBtn.title =
+            "Cancel recording countdown";
+          return;
+        }
+
+        if (mode === "starting") {
+          els.recordLabel.textContent = "START";
+          els.recordBtn.setAttribute(
+            "aria-label",
+            "Starting recording"
+          );
+          els.recordBtn.title = "Starting recording";
+          return;
+        }
+
+        els.recordLabel.textContent = "REC";
+        els.recordingTime.textContent = "00:00";
+        els.recordBtn.setAttribute(
+          "aria-label",
+          "Start recording"
+        );
+        els.recordBtn.title = "Start recording";
+      };
+
       const updateRecordingTimer = () => {
         els.recordingTime.textContent = formatDuration(Date.now() - recordingStartedAt);
       };
@@ -3580,10 +3932,9 @@ Speak naturally. The page will move with you.`;
         releaseRecordingAudio();
         stopComposedRecordingVideo();
         recordingUsesPaceAudio = false;
-        els.recordBtn.classList.remove("recording");
-        els.recordBtn.innerHTML = '● Rec <span id="recordingTime" class="recording-time">00:00</span>';
-        els.recordingTime = document.getElementById("recordingTime");
+        setRecordButtonVisual("idle");
         els.flipCameraBtn.disabled = !cameraStream;
+        updateCameraUi();
 
         if (!recordedChunks.length) {
           showCaption("The browser did not return recording data.", true);
@@ -3686,13 +4037,19 @@ Speak naturally. The page will move with you.`;
 
           stopComposedRecordingVideo();
 
-          const composedVideoTrack = createDesktopAspectVideoTrack();
-          const videoTracks = composedVideoTrack
-            ? [composedVideoTrack]
-            : cameraStream.getVideoTracks();
+          const composedVideoTrack =
+            createRecordingCanvasVideoTrack();
+
+          if (!composedVideoTrack) {
+            throw new Error(
+              "This browser cannot create the permanent canvas video track required for camera switching during recording."
+            );
+          }
+
+          recordingUsesCanvasVideo = true;
 
           recordingStream = new MediaStream([
-            ...videoTracks,
+            composedVideoTrack,
             ...audioTracks
           ]);
 
@@ -3724,10 +4081,8 @@ Speak naturally. The page will move with you.`;
           mediaRecorder.onstop = finishRecording;
 
           recordingStartedAt = Date.now();
-          els.recordBtn.classList.add("recording");
-          els.recordBtn.innerHTML = '■ Stop <span id="recordingTime" class="recording-time">00:00</span>';
-          els.recordingTime = document.getElementById("recordingTime");
-          els.flipCameraBtn.disabled = true;
+          setRecordButtonVisual("recording");
+          els.flipCameraBtn.disabled = false;
           updateRecordingTimer();
           recordingTimer = window.setInterval(updateRecordingTimer, 500);
 
@@ -3765,9 +4120,7 @@ Speak naturally. The page will move with you.`;
             : `Unable to record: ${escapeHtml(error?.message || "unknown error")}`;
           showCaption(message, true);
 
-          els.recordBtn.classList.remove("recording");
-          els.recordBtn.innerHTML = '● Rec <span id="recordingTime" class="recording-time">00:00</span>';
-          els.recordingTime = document.getElementById("recordingTime");
+          setRecordButtonVisual("idle");
           return false;
         }
       };
@@ -3825,9 +4178,7 @@ Speak naturally. The page will move with you.`;
       };
 
       const restoreRecordButton = () => {
-        els.recordBtn.classList.remove("recording");
-        els.recordBtn.innerHTML = '● Rec <span id="recordingTime" class="recording-time">00:00</span>';
-        els.recordingTime = document.getElementById("recordingTime");
+        setRecordButtonVisual("idle");
       };
 
       const cancelRecordingCountdown = () => {
@@ -3877,7 +4228,7 @@ Speak naturally. The page will move with you.`;
           if (!recordingCountdownActive || token !== recordingCountdownToken) return;
 
           els.countdownNumber.textContent = String(value);
-          els.recordBtn.textContent = `Cancel ${value}`;
+          setRecordButtonVisual("countdown", value);
           setStatus(`Recording in ${value}`);
           await wait(1000);
         }
@@ -3886,7 +4237,7 @@ Speak naturally. The page will move with you.`;
 
         recordingCountdownActive = false;
         els.countdownOverlay.classList.add("hidden");
-        els.recordBtn.textContent = "Starting…";
+        setRecordButtonVisual("starting");
         setStatus("Starting recording");
 
         const started = await startRecording();
@@ -3968,11 +4319,22 @@ Speak naturally. The page will move with you.`;
       };
 
       const flipCamera = async () => {
-        if (mediaRecorder?.state === "recording") {
+        const recordingActive =
+          mediaRecorder?.state === "recording" ||
+          mediaRecorder?.state === "paused";
+
+        if (
+          recordingActive &&
+          !recordingUsesCanvasVideo
+        ) {
           showCaption(
-            "Stop the recording before switching cameras.",
+            "This recording did not start with a switchable canvas track.",
             true
           );
+          return;
+        }
+
+        if (cameraTransitionActive) {
           return;
         }
 
@@ -4043,11 +4405,17 @@ Speak naturally. The page will move with you.`;
             lastRecognitionResultAt = 0;
 
             showCaption(
-              `${cameraName} active. Starting a fresh Voice Match engine…`
+              recordingActive
+                ? `${cameraName} active. Recording and microphone continued while Voice Match restarts…`
+                : `${cameraName} active. Starting a fresh Voice Match engine…`
             );
             window.setTimeout(beginRecognition, 500);
           } else {
-            showCaption(`${cameraName} active.`);
+            showCaption(
+              recordingActive
+                ? `${cameraName} active. Recording continued without changing files.`
+                : `${cameraName} active.`
+            );
           }
         } catch (error) {
           cameraTransitionActive = false;
@@ -4465,6 +4833,7 @@ Speak naturally. The page will move with you.`;
       restoreCameraControlPosition();
       updateFullscreenButton();
       updateStartButton(false);
+      setRecordButtonVisual("idle");
 
       const toolbarPreference = storageGet("voicePromptToolbarCompact");
       const likelyMobileDevice =
@@ -4481,7 +4850,7 @@ Speak naturally. The page will move with you.`;
       if (!SpeechRecognition) {
         showCaption("Voice recognition is unavailable in this browser. Timed scroll still works; use current Chrome or Edge for voice follow.", true);
       } else {
-        showCaption("v1.29 adds single-button Start/Pause controls and a draggable floating camera controller.");
+        showCaption("v1.30 records a permanent canvas track so FLIP can switch cameras without stopping the recording.");
       }
 
       document.addEventListener("visibilitychange", () => {
