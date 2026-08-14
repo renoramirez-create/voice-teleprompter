@@ -14,7 +14,7 @@
   <link rel="icon" href="favicon.ico" sizes="any" />
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
-  <title>VoicePrompt Teleprompter v1.30</title>
+  <title>VoicePrompt Teleprompter v1.31</title>
   <style>
     :root {
       --bg: #05090a;
@@ -1810,7 +1810,7 @@
   <main class="app">
     <header id="toolbar" class="toolbar">
       <div class="brand">Voice<span>Prompt</span></div>
-      <span class="version-badge" aria-label="App version 1.30" title="VoicePrompt version 1.30">v1.30</span>
+      <span class="version-badge" aria-label="App version 1.31" title="VoicePrompt version 1.31">v1.31</span>
 
       <button id="editBtn" title="Open or edit script">Script</button>
       <button id="startBtn" class="primary">Start listening</button>
@@ -3073,6 +3073,30 @@ Speak naturally. The page will move with you.`;
         return instance;
       };
 
+      const isPhoneDevice = () => {
+        const userAgentMobile =
+          navigator.userAgentData?.mobile === true;
+
+        const mobileUserAgent =
+          /Android|iPhone|iPod|Windows Phone|Mobile/i.test(
+            navigator.userAgent || ""
+          );
+
+        const coarsePhoneViewport =
+          window.matchMedia(
+            "(pointer: coarse) and (max-width: 950px)"
+          ).matches &&
+          navigator.maxTouchPoints > 0;
+
+        return (
+          userAgentMobile ||
+          mobileUserAgent ||
+          coarsePhoneViewport
+        );
+      };
+
+      const phoneDevice = isPhoneDevice();
+
       const escapeHtml = (value) => {
         const div = document.createElement("div");
         div.textContent = value;
@@ -3120,6 +3144,18 @@ Speak naturally. The page will move with you.`;
       };
 
       const startVoice = async () => {
+        if (phoneDevice) {
+          els.mode.value = "pace";
+          els.speedControl.hidden = false;
+          els.tracking.hidden = true;
+          updateStartButton(false);
+          showCaption(
+            "Voice Match is desktop-only. Speaking Pace is selected on phones."
+          );
+          await startPace();
+          return;
+        }
+
         if (!SpeechRecognition) {
           showCaption("This browser does not provide speech recognition. Use Speaking pace or Timed scroll mode.", true);
           setStatus("Unsupported");
@@ -4073,21 +4109,53 @@ Speak naturally. The page will move with you.`;
             options
           );
           mediaRecorder.ondataavailable = (event) => {
-            if (event.data && event.data.size > 0) recordedChunks.push(event.data);
+            if (
+              event.data &&
+              event.data.size > 0
+            ) {
+              recordedChunks.push(event.data);
+            }
           };
           mediaRecorder.onerror = (event) => {
-            showCaption(`Recording error: ${escapeHtml(event.error?.message || "unknown error")}`, true);
+            document.body.classList.remove(
+              "recording-active"
+            );
+
+            showCaption(
+              `Recording error: ${escapeHtml(
+                event.error?.message ||
+                "unknown error"
+              )}`,
+              true
+            );
           };
           mediaRecorder.onstop = finishRecording;
 
-          recordingStartedAt = Date.now();
-          setRecordButtonVisual("recording");
-          els.flipCameraBtn.disabled = false;
-          updateRecordingTimer();
-          recordingTimer = window.setInterval(updateRecordingTimer, 500);
+          mediaRecorder.onstart = () => {
+            recordingStartedAt = Date.now();
+            setRecordButtonVisual("recording");
+            els.flipCameraBtn.disabled = false;
+            updateRecordingTimer();
 
-          mediaRecorder.start(1000);
-          document.body.classList.add("recording-active");
+            if (recordingTimer) {
+              window.clearInterval(recordingTimer);
+            }
+
+            recordingTimer =
+              window.setInterval(
+                updateRecordingTimer,
+                500
+              );
+
+            document.body.classList.add(
+              "recording-active"
+            );
+          };
+
+          // Do not use a timeslice for MP4. A single continuous Blob is
+          // finalized when stop() fires, avoiding fragmented MP4 timing
+          // metadata that some browsers report with an incorrect duration.
+          mediaRecorder.start();
 
           if (shouldResumeVoice) {
             recognitionWanted = true;
@@ -4141,9 +4209,11 @@ Speak naturally. The page will move with you.`;
             autoFrame = null;
           }
 
-          setStatus("Stopping recording");
+          setStatus("Finalizing MP4");
+          showCaption(
+            "Finalizing MP4… keep this page open for a moment."
+          );
           mediaRecorder.stop();
-          showCaption("Recording stopped. Listening and scrolling are paused.");
         }
       };
 
@@ -4612,7 +4682,11 @@ Speak naturally. The page will move with you.`;
         parseScript(text);
         els.editor.classList.add("hidden");
         if (window.matchMedia("(max-width: 760px), (pointer: coarse)").matches || navigator.maxTouchPoints > 0) setToolbarCompact(true);
-        showCaption("Script loaded. Choose <strong>Start listening</strong>.");
+        showCaption(
+          phoneDevice
+            ? "Script loaded. Choose <strong>Start speaking pace</strong>."
+            : "Script loaded. Choose <strong>Start listening</strong>."
+        );
       });
 
       els.sampleBtn.addEventListener("click", () => {
@@ -4627,6 +4701,15 @@ Speak naturally. The page will move with you.`;
       });
 
       const startSelectedMethod = () => {
+        if (
+          phoneDevice &&
+          els.mode.value === "voice"
+        ) {
+          els.mode.value = "pace";
+          els.speedControl.hidden = false;
+          els.tracking.hidden = true;
+        }
+
         if (els.mode.value === "voice") {
           startVoice();
         } else if (els.mode.value === "pace") {
@@ -4721,6 +4804,13 @@ Speak naturally. The page will move with you.`;
 
       els.mode.addEventListener("change", () => {
         pauseAll();
+
+        if (
+          phoneDevice &&
+          els.mode.value === "voice"
+        ) {
+          els.mode.value = "pace";
+        }
 
         els.speedControl.hidden = els.mode.value === "voice";
         els.tracking.hidden = els.mode.value !== "voice";
@@ -4819,6 +4909,18 @@ Speak naturally. The page will move with you.`;
       els.scriptInput.value = saved || sample;
       parseScript(saved || sample);
 
+      if (phoneDevice) {
+        const voiceOption =
+          els.mode.querySelector(
+            'option[value="voice"]'
+          );
+
+        voiceOption?.remove();
+        els.mode.value = "pace";
+        els.speedControl.hidden = false;
+        els.tracking.hidden = true;
+      }
+
       const savedCameraAspect = storageGet("voicePromptCameraAspect");
       if (
         savedCameraAspect &&
@@ -4837,8 +4939,10 @@ Speak naturally. The page will move with you.`;
 
       const toolbarPreference = storageGet("voicePromptToolbarCompact");
       const likelyMobileDevice =
-        window.matchMedia("(max-width: 760px), (pointer: coarse)").matches ||
-        navigator.maxTouchPoints > 0;
+        phoneDevice ||
+        window.matchMedia(
+          "(max-width: 760px), (pointer: coarse)"
+        ).matches;
 
       setToolbarCompact(
         toolbarPreference === null
@@ -4847,10 +4951,19 @@ Speak naturally. The page will move with you.`;
         false
       );
 
-      if (!SpeechRecognition) {
-        showCaption("Voice recognition is unavailable in this browser. Timed scroll still works; use current Chrome or Edge for voice follow.", true);
+      if (phoneDevice) {
+        showCaption(
+          "v1.31 uses Speaking Pace by default on phones. Voice Match remains available on desktop."
+        );
+      } else if (!SpeechRecognition) {
+        showCaption(
+          "Voice recognition is unavailable in this browser. Speaking Pace and Timed Scroll are still available.",
+          true
+        );
       } else {
-        showCaption("v1.30 records a permanent canvas track so FLIP can switch cameras without stopping the recording.");
+        showCaption(
+          "v1.31 records MP4 as one continuous file to improve duration and playback metadata."
+        );
       }
 
       document.addEventListener("visibilitychange", () => {
